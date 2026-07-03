@@ -29,9 +29,14 @@ struct ActiveTransition {
 @MainActor
 final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
 
-    private let transition: ZoomTransition
-    private let phase: ZoomTransition.Phase
-    private let operation: ZoomTransition.Operation
+    let transition: ZoomTransition
+    let phase: ZoomTransition.Phase
+    let operation: ZoomTransition.Operation
+
+    /// Dimming view the driver creates and owns for the navigation (push/pop) path, where there is
+    /// no `ZoomPresentationController` to own one. `nil` on the modal path (the presentation
+    /// controller owns dimming there). Removed by `cleanup`.
+    private var navigationOwnedDimmingView: UIView?
 
     init(transition: ZoomTransition, phase: ZoomTransition.Phase, operation: ZoomTransition.Operation) {
         self.transition = transition
@@ -129,9 +134,20 @@ final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
         }
 
         let presentedVC = zoomedViewController
-        let dimmingView = (presentedVC.presentationController as? ZoomPresentationController)?.dimmingView
         let presenterView = (presentedVC.modalPresentationStyle == .custom) ? presenterVC?.view : nil
         let backgroundView: UIView? = (phase == .disappearing) ? context.view(forKey: .to) : nil
+
+        // Dimming: the modal path reads it from the presentation controller; the navigation path
+        // has none, so the driver builds and owns one (and, on pop, seats the revealed view behind
+        // the departing one). See `installNavigationBackdrop`.
+        let dimmingView: UIView?
+        switch operation {
+        case .push, .pop:
+            dimmingView = installNavigationBackdrop(container: container, context: context)
+            navigationOwnedDimmingView = dimmingView
+        case .present, .dismiss:
+            dimmingView = (presentedVC.presentationController as? ZoomPresentationController)?.dimmingView
+        }
 
         let portal = PortalView(frame: .zero)
         let token = RestorationToken()
@@ -238,6 +254,10 @@ final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
 
         active.strategy.finish(using: active.animationContext, completed: finished)
         active.animationContext.restorationToken.restore()
+        // The navigation path's dimming view is driver-owned scaffolding (the modal path's belongs
+        // to the presentation controller and is torn down there); remove it here.
+        navigationOwnedDimmingView?.removeFromSuperview()
+        navigationOwnedDimmingView = nil
         UIAccessibility.post(notification: .screenChanged, argument: nil)
 
         transition.activeTransition = nil
@@ -245,6 +265,46 @@ final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
     }
 
     // MARK: - Helpers
+
+    /// Prepares the container backdrop for a push/pop, standing in for the `ZoomPresentationController`
+    /// the navigation path doesn't have:
+    /// - On pop, seats the revealed (destination) view beneath the departing view so the shrinking
+    ///   portal lands over real content instead of an empty container.
+    /// - Creates the dimming view (from `configuration.dimmingColor`) the transition animator drives,
+    ///   inserted above the background content but below the portal `prepare` adds next.
+    ///
+    /// Returns the dimming view (`nil` when `dimmingColor` is `nil`), which the caller records for
+    /// removal in `cleanup`.
+    private func installNavigationBackdrop(
+        container: UIView,
+        context: UIViewControllerContextTransitioning
+    ) -> UIView? {
+        // Pop: place the revealed view under the departing one.
+        if phase == .disappearing,
+           let toVC = context.viewController(forKey: .to),
+           let toView = context.view(forKey: .to),
+           toView.superview !== container {
+            toView.frame = context.finalFrame(for: toVC)
+            container.insertSubview(toView, at: 0)
+        }
+
+        guard let color = transition.configuration.dimmingColor else { return nil }
+
+        let dimming = UIView()
+        dimming.backgroundColor = color
+        dimming.alpha = (phase == .appearing) ? 0 : 1
+        dimming.frame = container.bounds
+        dimming.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+
+        // Seat the dimming view directly above the background content it should darken.
+        let backdropKey: UITransitionContextViewKey = (phase == .appearing) ? .from : .to
+        if let backdrop = context.view(forKey: backdropKey), backdrop.superview === container {
+            container.insertSubview(dimming, aboveSubview: backdrop)
+        } else {
+            container.insertSubview(dimming, at: 0)
+        }
+        return dimming
+    }
 
     private func view(
         for viewController: UIViewController,
