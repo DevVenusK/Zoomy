@@ -60,11 +60,17 @@ final class RestorationTokenTests: XCTestCase {
     func test_recordedClosures_captureViewsWeaklyAndDoNotCrashAfterDeallocation() {
         let token = RestorationToken()
         var view: UIView? = UIView()
+        weak var probe = view
         token.recordHide(of: view!)
 
-        view = nil // deallocate the view before restore() ever runs
+        view = nil // drop the only strong reference before restore() ever runs
 
-        token.restore() // must not crash
+        // The probe going nil *while the token still holds its recorded closure* proves the
+        // closure's capture really is weak — a strong capture would keep the view alive here
+        // and this test would fail, rather than silently passing on "didn't crash" alone.
+        XCTAssertNil(probe, "recordHide must capture the view weakly, not keep it alive")
+
+        token.restore() // and restoring against the deallocated view must not crash
     }
 
     // MARK: - Convenience recorders restore the *original* captured value
@@ -139,10 +145,16 @@ final class RestorationTokenTests: XCTestCase {
     func test_recordAdditionalSafeAreaInsets_capturesWeaklyAndDoesNotCrashAfterDeallocation() {
         let token = RestorationToken()
         var viewController: UIViewController? = UIViewController()
+        weak var probe = viewController
         token.recordAdditionalSafeAreaInsets(of: viewController!)
 
-        viewController = nil
+        viewController = nil // drop the only strong reference before restore() ever runs
 
-        token.restore() // must not crash
+        // See test_recordedClosures_captureViewsWeakly...: the probe must already be nil while
+        // the token still holds the closure, proving the capture is weak (a strong capture
+        // would keep the VC alive and fail here).
+        XCTAssertNil(probe, "recordAdditionalSafeAreaInsets must capture the VC weakly, not keep it alive")
+
+        token.restore() // and restoring against the deallocated VC must not crash
     }
 }

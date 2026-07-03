@@ -26,7 +26,9 @@ extension UIViewController {
     ///    attached to a *different* view controller — one instance per view controller.
     /// 3. On first install, snapshots the current `(modalPresentationStyle,
     ///    transitioningDelegate)` so it can be restored later. A snapshot already present from
-    ///    an earlier install is left alone.
+    ///    an earlier install is left alone. When replacing a previously-installed *different*
+    ///    transition instance, the old instance's `attachedViewController` back-reference is
+    ///    released first so it can be legitimately attached elsewhere later.
     /// 4. Installs `.custom` / `newValue.modalAdapter` and records `self` as the transition's
     ///    `attachedViewController`.
     /// 5. Retains the transition via an associated object — `transitioningDelegate` is `weak`,
@@ -55,6 +57,17 @@ extension UIViewController {
                     "A ZoomTransition instance may only be attached to one view controller at a time — create a new instance"
                 )
                 return
+            }
+
+            // Replacing one transition with a different instance (without going through nil)
+            // must release the old instance's back-reference — otherwise it would stay
+            // "attached" to this VC forever and be falsely rejected by the double-attachment
+            // guard above when later attached to another VC. The snapshot is deliberately kept:
+            // it records the app's own pre-Zoomy style/delegate, and installing the new value
+            // overwrites the live style/delegate below anyway.
+            if let previous: ZoomTransition = AssociatedObjects.get(self, zoomTransitionKey),
+               previous !== newValue {
+                previous.attachedViewController = nil
             }
 
             let existingSnapshot: ModalPresentationSnapshot? =

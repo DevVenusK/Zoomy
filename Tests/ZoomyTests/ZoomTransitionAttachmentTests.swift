@@ -146,6 +146,57 @@ final class ZoomTransitionAttachmentTests: XCTestCase {
         XCTAssertTrue(vc.zoomTransition === transition)
     }
 
+    // MARK: - Replacement with a different instance
+
+    func test_replacingWithADifferentInstance_releasesTheOldInstancesAttachment() {
+        let vc1 = UIViewController()
+        let transitionA = makeTransition()
+        let transitionB = makeTransition()
+
+        vc1.zoomTransition = transitionA
+        vc1.zoomTransition = transitionB // direct overwrite, no nil in between
+
+        XCTAssertNil(transitionA.attachedViewController,
+                     "the replaced instance must no longer consider itself attached to vc1")
+        XCTAssertTrue(transitionB.attachedViewController === vc1)
+        XCTAssertTrue(vc1.zoomTransition === transitionB)
+        XCTAssertTrue(vc1.transitioningDelegate === transitionB.modalAdapter)
+    }
+
+    func test_replacedInstance_canBeAttachedToAnotherViewControllerWithoutFalseRejection() {
+        let vc1 = UIViewController()
+        let vc2 = UIViewController()
+        let transitionA = makeTransition()
+        let transitionB = makeTransition()
+
+        vc1.zoomTransition = transitionA
+        vc1.zoomTransition = transitionB // replaces A on vc1
+
+        var messages: [String] = []
+        ZoomyAssert.handler = { messages.append($0) }
+
+        vc2.zoomTransition = transitionA // must NOT be treated as double attachment
+
+        XCTAssertTrue(messages.isEmpty,
+                      "attaching a properly-released instance must not trip the double-attachment guard")
+        XCTAssertTrue(vc2.zoomTransition === transitionA)
+        XCTAssertTrue(transitionA.attachedViewController === vc2)
+    }
+
+    func test_replacingWithADifferentInstance_preservesTheOriginalSnapshotForLaterRestore() {
+        let vc = UIViewController()
+        vc.modalPresentationStyle = .overFullScreen
+        let transitionA = makeTransition()
+        let transitionB = makeTransition()
+
+        vc.zoomTransition = transitionA
+        vc.zoomTransition = transitionB
+        vc.zoomTransition = nil
+
+        XCTAssertEqual(vc.modalPresentationStyle, .overFullScreen,
+                       "the pre-Zoomy snapshot must survive an A→B replacement and restore on nil")
+    }
+
     // MARK: - present-after-assignment precondition
 
     /// Driving a real, full `present(animated:completion:)` round trip to completion isn't
@@ -269,9 +320,25 @@ final class ZoomTransitionAttachmentTests: XCTestCase {
         XCTAssertEqual(delegate.didEndResult, result)
     }
 
-    func test_reportWillBegin_withNoDelegateSet_doesNotCrash() {
+    func test_report_withNoDelegateSet_isSafeAndDelegateSetAfterwardStillReceivesCalls() {
         let transition = makeTransition()
+        XCTAssertNil(transition.delegate, "delegate must default to nil")
+
+        // Reporting with no delegate must be a safe no-op (no crash, no state corruption)...
         transition.reportWillBegin(makeContext(phase: .appearing, operation: .push))
-        // No assertion beyond "did not crash" — delegate is nil by default.
+        transition.reportDidEnd(
+            makeContext(phase: .appearing, operation: .push),
+            result: ZoomTransition.Result(isCompleted: true, wasInteractive: false, fallbackReason: nil)
+        )
+        XCTAssertNil(transition.delegate, "reporting must not conjure a delegate")
+
+        // ...and the transition must remain fully functional: a delegate attached afterward
+        // receives subsequent reports normally.
+        let delegate = RecordingDelegate()
+        transition.delegate = delegate
+        transition.reportWillBegin(makeContext(phase: .disappearing, operation: .dismiss))
+
+        XCTAssertEqual(delegate.willBeginContext?.phase, .disappearing)
+        XCTAssertEqual(delegate.willBeginContext?.operation, .dismiss)
     }
 }
