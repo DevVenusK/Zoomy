@@ -1,4 +1,5 @@
 import UIKit
+import Zoomy
 
 /// Grid item with a stable identity so diffable snapshots stay consistent.
 struct PhotoItem: Hashable {
@@ -46,6 +47,15 @@ final class PhotoCell: UICollectionViewCell {
 }
 
 final class GridViewController: UIViewController {
+
+    /// Which navigation style a tap triggers. Tab 1 pushes (M4 — not yet wired); tab 2 presents
+    /// a modal zoom (M3b).
+    enum Mode {
+        case push
+        case modal
+    }
+
+    var mode: Mode = .push
 
     private enum Section {
         case main
@@ -138,9 +148,49 @@ final class GridViewController: UIViewController {
     }
 }
 
+extension GridViewController {
+
+    /// Presents `item`'s detail with a Zoomy modal zoom. The source-view provider re-resolves the
+    /// live cell by *stable ID* (not index path) at animation time — the consumer pattern from
+    /// brief §3a — so a reload or scroll between tap and dismiss still finds the right source view
+    /// (or cleanly falls back when the cell is off-screen).
+    func presentZoomDetail(for item: PhotoItem) {
+        let detail = PhotoDetailViewController(item: item)
+
+        let capturedID = item.id
+        detail.zoomTransition = ZoomTransition { [weak self] _ in
+            guard let self,
+                  let index = self.items.firstIndex(where: { $0.id == capturedID }) else {
+                return nil
+            }
+            let path = IndexPath(item: index, section: 0)
+            guard let cell = self.collectionView.cellForItem(at: path) as? PhotoCell else {
+                return nil
+            }
+            return cell.photoView
+        }
+
+        present(detail, animated: true)
+    }
+
+    /// Screenshot / UI-test affordance: present the first item's detail without a tap. Inert
+    /// unless invoked from `SceneDelegate` under the `-zoomyDemoPresent` launch argument.
+    func presentFirstItemForDemo() {
+        guard mode == .modal, let first = items.first else { return }
+        presentZoomDetail(for: first)
+    }
+}
+
 extension GridViewController: UICollectionViewDelegate {
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        // M3에서 zoom present 연결
+        collectionView.deselectItem(at: indexPath, animated: false)
+
+        guard mode == .modal else {
+            // Tab 1 (Push) zoom navigation lands in M4.
+            return
+        }
+
+        presentZoomDetail(for: items[indexPath.item])
     }
 }

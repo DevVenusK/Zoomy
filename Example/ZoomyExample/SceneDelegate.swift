@@ -11,12 +11,22 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     ) {
         guard let windowScene = scene as? UIWindowScene else { return }
         let window = UIWindow(windowScene: windowScene)
-        window.rootViewController = makeRootTabBarController()
+        let (tabBarController, modalGrid) = makeRootTabBarController()
+        window.rootViewController = tabBarController
         window.makeKeyAndVisible()
         self.window = window
+
+        // Screenshot / UI-test affordance: jump to the Modal tab and auto-present the first item
+        // so the zoom transition can be captured without a synthesized tap. No-op otherwise.
+        if ProcessInfo.processInfo.arguments.contains("-zoomyDemoPresent") {
+            tabBarController.selectedIndex = 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                modalGrid.presentFirstItemForDemo()
+            }
+        }
     }
 
-    private func makeRootTabBarController() -> UITabBarController {
+    private func makeRootTabBarController() -> (UITabBarController, GridViewController) {
         let pushGrid = GridViewController()
         pushGrid.title = "Push"
         let pushTab = UINavigationController(rootViewController: pushGrid)
@@ -27,6 +37,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         )
 
         let modalTab = GridViewController()
+        modalTab.mode = .modal
+        modalTab.title = "Modal"
         modalTab.tabBarItem = UITabBarItem(
             title: "Modal",
             image: UIImage(systemName: "rectangle.portrait.on.rectangle.portrait"),
@@ -43,6 +55,6 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
         let tabBarController = UITabBarController()
         tabBarController.viewControllers = [pushTab, modalTab, tortureTab]
-        return tabBarController
+        return (tabBarController, modalTab)
     }
 }
