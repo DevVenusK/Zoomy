@@ -17,9 +17,16 @@ final class MockTransitionContext: NSObject, UIViewControllerContextTransitionin
     private(set) var completeTransitionCallCount = 0
     private(set) var completeTransitionFlags: [Bool] = []
     private(set) var updateInteractiveCallCount = 0
+    private(set) var lastUpdateInteractivePercent: CGFloat?
     private(set) var finishInteractiveCallCount = 0
     private(set) var cancelInteractiveCallCount = 0
     private(set) var pauseInteractiveCallCount = 0
+    /// Ordered log of the interactive/completion callbacks, for asserting call *order* (§8): e.g.
+    /// `["update", "finish", "complete(true)"]`.
+    private(set) var eventLog: [String] = []
+
+    /// Toggleable so a test can present an interactive context (§8). Defaults to `false`.
+    var isInteractiveOverride = false
 
     init(
         containerView: UIView,
@@ -37,7 +44,7 @@ final class MockTransitionContext: NSObject, UIViewControllerContextTransitionin
     }
 
     var isAnimated: Bool { true }
-    var isInteractive: Bool { false }
+    var isInteractive: Bool { isInteractiveOverride }
     var transitionWasCancelled: Bool { false }
     var presentationStyle: UIModalPresentationStyle { .custom }
     var targetTransform: CGAffineTransform { .identity }
@@ -64,10 +71,27 @@ final class MockTransitionContext: NSObject, UIViewControllerContextTransitionin
     func completeTransition(_ didComplete: Bool) {
         completeTransitionCallCount += 1
         completeTransitionFlags.append(didComplete)
+        eventLog.append("complete(\(didComplete))")
     }
 
-    func updateInteractiveTransition(_ percentComplete: CGFloat) { updateInteractiveCallCount += 1 }
-    func finishInteractiveTransition() { finishInteractiveCallCount += 1 }
-    func cancelInteractiveTransition() { cancelInteractiveCallCount += 1 }
-    func pauseInteractiveTransition() { pauseInteractiveCallCount += 1 }
+    func updateInteractiveTransition(_ percentComplete: CGFloat) {
+        updateInteractiveCallCount += 1
+        lastUpdateInteractivePercent = percentComplete
+        eventLog.append("update")
+    }
+
+    func finishInteractiveTransition() {
+        finishInteractiveCallCount += 1
+        eventLog.append("finish")
+    }
+
+    func cancelInteractiveTransition() {
+        cancelInteractiveCallCount += 1
+        eventLog.append("cancel")
+    }
+
+    func pauseInteractiveTransition() {
+        pauseInteractiveCallCount += 1
+        eventLog.append("pause")
+    }
 }
