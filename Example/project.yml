@@ -1,0 +1,27 @@
+name: ZoomyExample
+options:
+  bundleIdPrefix: com.zoomy
+  deploymentTarget:
+    iOS: "15.0"
+packages:
+  Zoomy:
+    path: ../
+targets:
+  ZoomyExample:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - ZoomyExample
+    dependencies:
+      - package: Zoomy
+    info:
+      path: ZoomyExample/Info.plist
+      properties:
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default Configuration
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).SceneDelegate
