@@ -1,0 +1,295 @@
+import UIKit
+
+/// The real zoom choreography (`docs/TECH_SPEC.md` §6/§7): flies a `PortalView` between the
+/// resolved source rect and the destination's final frame while the live view counter-scales
+/// inside it, morphing corner radius, dimming, presenter push-back, and a source-snapshot
+/// placard along the way.
+///
+/// Property ownership follows the §6.2 split verbatim: the *transition* animator carries only
+/// scrub/reverse-safe properties (dimming alpha, presenter push-back, placard keyframes, corner
+/// morph, status-bar update); the *geometry* animator carries the portal frame and the live
+/// view's counter-scale. Both are always separate, even here in the non-interactive path, so
+/// M6's grab can kill and rebuild the geometry animator alone (TECH_SPEC §14-2).
+///
+/// ### Top-center anchoring — judgment call
+/// The brief specifies a "top-center anchor effect" achieved by scaling the live view and then
+/// correcting `frame.origin`. Mutating `frame` *while a transform is applied* is unsupported by
+/// UIKit (frame is derived from bounds+center+transform, and animating it alongside the
+/// transform corrupts both). This implementation realises the identical visual by animating the
+/// UIKit-supported animatable pair `center` + `transform` instead: with the live view's bounds
+/// frozen at the final size, a scale of `s` and a center of `(finalW·s/2, finalH·s/2)` pins the
+/// top edge to y=0 and horizontally centers the view; because portal frame, live-view center,
+/// and live-view scale all interpolate on the *same* spring, the view stays top-centered and
+/// exactly portal-width for the whole flight. See the report for the geometry derivation.
+@MainActor
+final class ZoomAnimator: ZoomTransitionAnimating {
+
+    /// Presenter push-back scale while a modal `.custom` destination is on top (§6.2).
+    private static let presenterPushBack = CGAffineTransform(scaleX: 0.94, y: 0.94)
+
+    /// Placard cross-fade timing as a fraction of the animator timeline (§3 table).
+    private static let appearingPlacardFadeOutEnd: Double = 0.4
+    private static let disappearingPlacardFadeInStart: Double = 0.7
+
+    func prepare(using context: ZoomAnimationContext) {
+        guard let source = context.resolvedSource, let geometry = context.geometry else {
+            // ZoomAnimator is only ever selected when the source resolved; defend anyway.
+            ZoomyAssert.fail("ZoomAnimator.prepare called without a resolved source")
+            context.containerView.addSubview(context.zoomedView)
+            context.zoomedView.frame = context.finalFrame
+            return
+        }
+
+        switch context.phase {
+        case .appearing: prepareAppearing(context, source: source, geometry: geometry)
+        case .disappearing: prepareDisappearing(context, source: source, geometry: geometry)
+        }
+    }
+
+    func makeAnimators(
+        using context: ZoomAnimationContext
+    ) -> (transition: UIViewPropertyAnimator, geometry: [UIViewPropertyAnimator]) {
+        let spring = context.configuration.spring
+        let transitionAnimator = makeSpringAnimator(spring)
+        let geometryAnimator = makeSpringAnimator(spring)
+
+        switch context.phase {
+        case .appearing: configureAppearingAnimators(context, transitionAnimator, geometryAnimator)
+        case .disappearing: configureDisappearingAnimators(context, transitionAnimator, geometryAnimator)
+        }
+
+        return (transitionAnimator, [geometryAnimator])
+    }
+
+    func finish(using context: ZoomAnimationContext, completed: Bool) {
+        let portal = context.portal
+        let zoomedView = context.zoomedView
+
+        switch (context.phase, completed) {
+        case (.appearing, true):
+            // Land the live view back in the container at its resting frame.
+            context.containerView.addSubview(zoomedView)
+            zoomedView.transform = .identity
+            zoomedView.frame = context.finalFrame
+            portal.removeFromSuperview()
+
+        case (.disappearing, true):
+            // The destination is going away — removing the portal removes the hosted live view.
+            portal.removeFromSuperview()
+
+        case (.appearing, false):
+            // Non-interactive present has no cancel path (M6); defensive teardown only.
+            zoomedView.removeFromSuperview()
+            portal.removeFromSuperview()
+
+        case (.disappearing, false):
+            // Cancelled dismiss (M6): restore the live view to its resting position.
+            context.containerView.addSubview(zoomedView)
+            zoomedView.transform = .identity
+            zoomedView.frame = context.finalFrame
+            portal.removeFromSuperview()
+        }
+    }
+
+    // MARK: - Appearing (present)
+
+    private func prepareAppearing(
+        _ context: ZoomAnimationContext,
+        source: ResolvedSource,
+        geometry: ZoomGeometry
+    ) {
+        let container = context.containerView
+        let zoomedView = context.zoomedView
+        let portal = context.portal
+
+        // 1. Host the live view at its final frame and lay it out once, so its internal layout
+        //    is frozen for the whole flight (only a transform moves after this).
+        container.addSubview(zoomedView)
+        zoomedView.autoresizingMask = []
+        zoomedView.frame = context.finalFrame
+        container.layoutIfNeeded()
+
+        // 3. Portal at the source rect, corner at the source radius.
+        container.addSubview(portal)
+        portal.frame = source.rectInContainer
+        portal.portalCornerRadius = geometry.sourceCornerRadius
+
+        // 4. Reparent into the portal and counter-scale to portal width, top-center anchored.
+        portal.contentContainer.addSubview(zoomedView)
+        zoomedView.frame = CGRect(origin: .zero, size: context.finalFrame.size)
+        let scale = geometry.contentScale(portalWidth: portal.bounds.width)
+        zoomedView.transform = CGAffineTransform(scaleX: scale, y: scale)
+        zoomedView.center = scaledTopCenter(finalSize: context.finalFrame.size, scale: scale)
+
+        // 2. Safe-area pin — injected *after* reparenting (judgment call, see report): inside the
+        //    small portal the inherited insets are already 0, so injecting the window insets as
+        //    `additional` keeps the total equal to the value the frozen layout used, with no
+        //    double application. Injecting before reparenting (while still full-screen, inherited
+        //    == window insets) would momentarily double them.
+        let windowInsets = container.window?.safeAreaInsets ?? .zero
+        context.restorationToken.recordAdditionalSafeAreaInsets(of: context.zoomedViewController)
+        context.zoomedViewController.additionalSafeAreaInsets = windowInsets
+
+        // 5. Placard on top (alpha 1 → fades out early), source hidden.
+        if let placard = source.placard {
+            placard.alpha = 1
+            portal.placardView = placard
+        }
+        context.restorationToken.recordHide(of: source.view)
+        source.view.isHidden = true
+
+        // 6. Dimming starts clear; presenter starts at identity (records for restore).
+        context.dimmingView?.alpha = 0
+        if let presenter = context.presenterView {
+            context.restorationToken.recordTransform(of: presenter)
+            presenter.transform = .identity
+        }
+
+        // Flush initial state to the presentation layers before animators capture "from" values.
+        container.layoutIfNeeded()
+    }
+
+    private func configureAppearingAnimators(
+        _ context: ZoomAnimationContext,
+        _ transitionAnimator: UIViewPropertyAnimator,
+        _ geometryAnimator: UIViewPropertyAnimator
+    ) {
+        guard let geometry = context.geometry else { return }
+        let portal = context.portal
+        let zoomedView = context.zoomedView
+        let finalSize = context.finalFrame.size
+
+        // Geometry: portal grows to the final frame; live view un-scales to identity, centered.
+        geometryAnimator.addAnimations {
+            portal.frame = context.finalFrame
+            zoomedView.transform = .identity
+            zoomedView.center = CGPoint(x: finalSize.width / 2, y: finalSize.height / 2)
+        }
+
+        // Transition: dimming in, presenter pushed back, corner morph to final, status bar.
+        transitionAnimator.addAnimations {
+            context.dimmingView?.alpha = 1
+            context.presenterView?.transform = Self.presenterPushBack
+            portal.portalCornerRadius = geometry.finalCornerRadius
+            context.zoomedViewController.setNeedsStatusBarAppearanceUpdate()
+        }
+
+        // Placard fades out over the first 40% of the timeline.
+        if let placard = portal.placardView {
+            transitionAnimator.addAnimations {
+                UIView.animateKeyframes(withDuration: 1, delay: 0, options: [.calculationModeLinear]) {
+                    UIView.addKeyframe(withRelativeStartTime: 0, relativeDuration: Self.appearingPlacardFadeOutEnd) {
+                        placard.alpha = 0
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Disappearing (dismiss)
+
+    private func prepareDisappearing(
+        _ context: ZoomAnimationContext,
+        source: ResolvedSource,
+        geometry: ZoomGeometry
+    ) {
+        let container = context.containerView
+        let zoomedView = context.zoomedView
+        let portal = context.portal
+
+        // 2. Background: re-insert the presenter view under the departing view for `.fullScreen`.
+        //    `.custom` keeps the presenter alive outside the container (nothing to do);
+        //    `.overFullScreen` proceeds even with no `.to` view.
+        if context.zoomedViewController.modalPresentationStyle == .fullScreen,
+           let background = context.backgroundView {
+            container.insertSubview(background, at: 0)
+            background.frame = context.finalFrame
+            container.layoutIfNeeded()
+        }
+
+        // 3. Portal at the live view's current (resting) frame; reparent identity.
+        let currentFrame = zoomedView.frame
+        container.addSubview(portal)
+        portal.frame = currentFrame
+        portal.portalCornerRadius = geometry.finalCornerRadius
+
+        portal.contentContainer.addSubview(zoomedView)
+        zoomedView.autoresizingMask = []
+        zoomedView.frame = CGRect(origin: .zero, size: currentFrame.size)
+        zoomedView.transform = .identity
+        zoomedView.center = CGPoint(x: currentFrame.width / 2, y: currentFrame.height / 2)
+
+        // Placard starts clear (fades in near the end), source hidden.
+        if let placard = source.placard {
+            placard.alpha = 0
+            portal.placardView = placard
+        }
+        context.restorationToken.recordHide(of: source.view)
+        source.view.isHidden = true
+
+        // Dimming starts opaque; presenter push-back recorded so it can return to identity.
+        context.dimmingView?.alpha = 1
+        if let presenter = context.presenterView {
+            context.restorationToken.recordTransform(of: presenter)
+        }
+
+        container.layoutIfNeeded()
+    }
+
+    private func configureDisappearingAnimators(
+        _ context: ZoomAnimationContext,
+        _ transitionAnimator: UIViewPropertyAnimator,
+        _ geometryAnimator: UIViewPropertyAnimator
+    ) {
+        guard let source = context.resolvedSource, let geometry = context.geometry else { return }
+        let portal = context.portal
+        let zoomedView = context.zoomedView
+        let finalSize = context.finalFrame.size
+        let scale = geometry.contentScale(portalWidth: source.rectInContainer.width)
+
+        // Geometry: portal shrinks to the source rect; live view scales down, top-center anchored.
+        geometryAnimator.addAnimations {
+            portal.frame = source.rectInContainer
+            zoomedView.transform = CGAffineTransform(scaleX: scale, y: scale)
+            zoomedView.center = self.scaledTopCenter(finalSize: finalSize, scale: scale)
+        }
+
+        // Transition: dimming out, presenter back to identity, corner morph to the source radius.
+        transitionAnimator.addAnimations {
+            context.dimmingView?.alpha = 0
+            context.presenterView?.transform = .identity
+            portal.portalCornerRadius = geometry.sourceCornerRadius
+            context.zoomedViewController.setNeedsStatusBarAppearanceUpdate()
+        }
+
+        // Placard fades in over the last 30% of the timeline.
+        if let placard = portal.placardView {
+            transitionAnimator.addAnimations {
+                UIView.animateKeyframes(withDuration: 1, delay: 0, options: [.calculationModeLinear]) {
+                    UIView.addKeyframe(
+                        withRelativeStartTime: Self.disappearingPlacardFadeInStart,
+                        relativeDuration: 1 - Self.disappearingPlacardFadeInStart
+                    ) {
+                        placard.alpha = 1
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    /// Center that pins the top edge to y=0 and horizontally centers a `finalSize`-bounds view
+    /// scaled by `scale` (derivation in the type doc / report).
+    private func scaledTopCenter(finalSize: CGSize, scale: CGFloat) -> CGPoint {
+        CGPoint(x: finalSize.width * scale / 2, y: finalSize.height * scale / 2)
+    }
+
+    private func makeSpringAnimator(_ spring: ZoomTransition.Spring) -> UIViewPropertyAnimator {
+        let timing = SpringConverter.timingParameters(
+            response: spring.response,
+            dampingRatio: spring.dampingRatio
+        )
+        return UIViewPropertyAnimator(duration: spring.response, timingParameters: timing)
+    }
+}
