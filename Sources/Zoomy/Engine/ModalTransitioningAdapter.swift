@@ -1,14 +1,13 @@
 import UIKit
+import os.log
 
 /// The `UIViewControllerTransitioningDelegate` a `ZoomTransition` installs on its attached view
-/// controller (see `UIViewController.zoomTransition`'s setter).
+/// controller (see `UIViewController.zoomTransition`'s setter). Vends a `TransitionDriver` for
+/// present/dismiss and a `ZoomPresentationController` for `.custom` presentations, gating every
+/// animation controller on the state machine being idle (the reentrancy guard, §8).
 ///
-/// M3a stub: every vend point returns `nil`, so UIKit falls back to its system-default
-/// presentation/dismissal animation. Real zoom choreography (`TransitionDriver`,
-/// `ZoomInteractionDriver`, `ZoomPresentationController`) lands in M3b — this keeps the library
-/// in a safe, compiling, "does nothing surprising" state in the interim: assigning
-/// `zoomTransition` and presenting is functionally a no-op beyond the `.custom` presentation
-/// style plumbing the setter installs.
+/// Interactive dismissal (`interactionControllerFor…`) and Reduce Motion / VoiceOver gating are
+/// M6/M7 — those vend points still return `nil`.
 final class ModalTransitioningAdapter: NSObject, UIViewControllerTransitioningDelegate {
     unowned let transition: ZoomTransition
 
@@ -16,36 +15,66 @@ final class ModalTransitioningAdapter: NSObject, UIViewControllerTransitioningDe
         self.transition = transition
     }
 
-    // TODO(M3b): gate on state/Reduce Motion/VoiceOver and vend TransitionDriver or a
-    // CrossDissolve fallback driver instead of `nil` (see `docs/TECH_SPEC.md` §5.8).
     func animationController(
         forPresented presented: UIViewController,
         presenting: UIViewController,
         source: UIViewController
     ) -> UIViewControllerAnimatedTransitioning? {
-        nil
+        guard transition.stateMachine.state == .idle else {
+            logReentrantRejection(direction: "present")
+            return nil
+        }
+        return TransitionDriver(transition: transition, phase: .appearing, operation: .present)
     }
 
-    // TODO(M3b): vend TransitionDriver instead of `nil`.
     func animationController(
         forDismissed dismissed: UIViewController
     ) -> UIViewControllerAnimatedTransitioning? {
-        nil
+        guard transition.stateMachine.state == .idle else {
+            logReentrantRejection(direction: "dismiss")
+            return nil
+        }
+        return TransitionDriver(transition: transition, phase: .disappearing, operation: .dismiss)
     }
 
-    // TODO(M3b): vend a ZoomInteractionDriver when `configuration.interactiveDismissal == .pan`.
+    // TODO(M6): vend a ZoomInteractionDriver when `configuration.interactiveDismissal == .pan`.
     func interactionControllerForDismissal(
         using animator: UIViewControllerAnimatedTransitioning
     ) -> UIViewControllerInteractiveTransitioning? {
         nil
     }
 
-    // TODO(M3b): vend ZoomPresentationController when the presented style is `.custom`.
+    // TODO(M6): vend the driver (wantsInteractiveStart = false) so a grab mid-present is legal.
+    func interactionControllerForPresentation(
+        using animator: UIViewControllerAnimatedTransitioning
+    ) -> UIViewControllerInteractiveTransitioning? {
+        nil
+    }
+
     func presentationController(
         forPresented presented: UIViewController,
         presenting: UIViewController?,
         source: UIViewController
     ) -> UIPresentationController? {
-        nil
+        guard presented.modalPresentationStyle == .custom else { return nil }
+        return ZoomPresentationController(
+            presentedViewController: presented,
+            presenting: presenting,
+            transition: transition
+        )
+    }
+
+    /// Reentrant rejection returns `nil` (system default) *without* reporting a `Result` — a
+    /// zoom/fallback never actually ran, so a `didEnd` here would be mistaken for the end of a
+    /// real transition (§8). DEBUG diagnostics only.
+    private func logReentrantRejection(direction: String) {
+        #if DEBUG
+        os_log(
+            "ZoomTransition %{public}@ vend rejected: state machine not idle (reentrant)",
+            log: .zoomy,
+            type: .debug,
+            direction
+        )
+        #endif
     }
 }

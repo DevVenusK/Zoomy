@@ -30,6 +30,14 @@ public final class ZoomTransition: NSObject {
     var stateMachine = TransitionStateMachine()
     lazy var modalAdapter = ModalTransitioningAdapter(transition: self)
 
+    /// Non-nil only while a transition is in flight — holds the animators, animation context,
+    /// and `UIViewControllerContextTransitioning` for the current run (see `ActiveTransition`).
+    /// Dropped to `nil` by the driver's single-exit cleanup.
+    var activeTransition: ActiveTransition?
+    /// The driver running `activeTransition`, retained here for the transition's duration so it
+    /// outlives UIKit's own hold; released alongside `activeTransition` at cleanup.
+    var currentDriver: TransitionDriver?
+
     public init(configuration: Configuration = .default, sourceViewProvider: @escaping SourceViewProvider) {
         self.configuration = configuration
         self.sourceViewProvider = sourceViewProvider
