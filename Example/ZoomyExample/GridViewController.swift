@@ -173,11 +173,41 @@ extension GridViewController {
         present(detail, animated: true)
     }
 
+    /// Pushes `item`'s detail with a Zoomy push zoom. Uses the same stable-ID re-resolution pattern
+    /// as `presentZoomDetail`, so a scroll/reload between push and pop still finds the source cell.
+    /// The navigation controller's `ZoomNavigationDelegate` (installed in `SceneDelegate`) vends the
+    /// zoom driver for the push and the adjacent pop.
+    func pushZoomDetail(for item: PhotoItem) {
+        let detail = PhotoDetailViewController(item: item, presentationContext: .push)
+
+        let capturedID = item.id
+        detail.zoomTransition = ZoomTransition { [weak self] _ in
+            guard let self,
+                  let index = self.items.firstIndex(where: { $0.id == capturedID }) else {
+                return nil
+            }
+            let path = IndexPath(item: index, section: 0)
+            guard let cell = self.collectionView.cellForItem(at: path) as? PhotoCell else {
+                return nil
+            }
+            return cell.photoView
+        }
+
+        navigationController?.pushViewController(detail, animated: true)
+    }
+
     /// Screenshot / UI-test affordance: present the first item's detail without a tap. Inert
     /// unless invoked from `SceneDelegate` under the `-zoomyDemoPresent` launch argument.
     func presentFirstItemForDemo() {
         guard mode == .modal, let first = items.first else { return }
         presentZoomDetail(for: first)
+    }
+
+    /// Screenshot / UI-test affordance: push the first item's detail without a tap. Inert unless
+    /// invoked from `SceneDelegate` under the `-zoomyDemoPush` launch argument.
+    func pushFirstItemForDemo() {
+        guard mode == .push, let first = items.first else { return }
+        pushZoomDetail(for: first)
     }
 }
 
@@ -186,11 +216,11 @@ extension GridViewController: UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: false)
 
-        guard mode == .modal else {
-            // Tab 1 (Push) zoom navigation lands in M4.
-            return
+        switch mode {
+        case .push:
+            pushZoomDetail(for: items[indexPath.item])
+        case .modal:
+            presentZoomDetail(for: items[indexPath.item])
         }
-
-        presentZoomDetail(for: items[indexPath.item])
     }
 }

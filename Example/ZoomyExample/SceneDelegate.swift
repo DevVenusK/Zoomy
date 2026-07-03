@@ -1,4 +1,5 @@
 import UIKit
+import Zoomy
 
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
@@ -11,7 +12,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     ) {
         guard let windowScene = scene as? UIWindowScene else { return }
         let window = UIWindow(windowScene: windowScene)
-        let (tabBarController, modalGrid) = makeRootTabBarController()
+        let (tabBarController, pushGrid, modalGrid) = makeRootTabBarController()
         window.rootViewController = tabBarController
         window.makeKeyAndVisible()
         self.window = window
@@ -24,12 +25,28 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                 modalGrid.presentFirstItemForDemo()
             }
         }
+
+        // Screenshot / UI-test affordance: stay on the Push tab and auto-push the first item so the
+        // push zoom can be captured without a synthesized tap. No-op otherwise.
+        if ProcessInfo.processInfo.arguments.contains("-zoomyDemoPush") {
+            tabBarController.selectedIndex = 0
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                pushGrid.pushFirstItemForDemo()
+            }
+            // Then pop back so a single run exercises push zoom *and* the adjacent pop zoom.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.8) {
+                pushGrid.navigationController?.popViewController(animated: true)
+            }
+        }
     }
 
-    private func makeRootTabBarController() -> (UITabBarController, GridViewController) {
+    private func makeRootTabBarController() -> (UITabBarController, GridViewController, GridViewController) {
         let pushGrid = GridViewController()
         pushGrid.title = "Push"
         let pushTab = UINavigationController(rootViewController: pushGrid)
+        // Install the Zoomy navigation proxy so single-step push/pop of a VC carrying a
+        // `zoomTransition` animates as a zoom while any other delegate messages still forward.
+        pushTab.enableZoomTransitions()
         pushTab.tabBarItem = UITabBarItem(
             title: "Push",
             image: UIImage(systemName: "square.grid.3x3"),
@@ -55,6 +72,6 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
         let tabBarController = UITabBarController()
         tabBarController.viewControllers = [pushTab, modalTab, tortureTab]
-        return (tabBarController, modalTab)
+        return (tabBarController, pushGrid, modalTab)
     }
 }
