@@ -156,6 +156,60 @@ final class InteractiveCallOrderTests: XCTestCase {
         XCTAssertEqual(spy.lastResult, ZoomTransition.Result(isCompleted: false, wasInteractive: true, fallbackReason: nil))
     }
 
+    // MARK: - S3b: grab a *reversed* (cancel) settle → rebuild → complete
+
+    /// The hardest path (§4 rule 2): the first release cancels, so the transition animator runs
+    /// *reversed*; a mid-settle grab must stop-and-rebuild it (never scrub a reversed animator), and
+    /// the rebuilt forward animator must then settle to completion with exactly one
+    /// `completeTransition`. S3 only exercised the scrub-safe forward-freeze branch — this drives the
+    /// `if isReversed` branch end-to-end.
+    func test_grabDuringCancelSettle_rebuildsReversedAnimatorThenCompletesExactlyOnce() {
+        let spy = SpyDelegate()
+        let exp = expectation(description: "reverse-rebuild then complete didEnd")
+        spy.didEndExpectation = exp
+        let scene = makeInteractiveDismissScene(delegate: spy)
+
+        scene.start()
+        scene.pan(.changed, translation: CGPoint(x: 0, y: 150))
+        let animatorBeforeGrab = scene.transition.activeTransition?.transitionAnimator
+
+        // 1st release: upward → cancel settle (transition animator runs reversed).
+        scene.pan(.ended, translation: CGPoint(x: 0, y: 150), velocity: CGPoint(x: 0, y: -600))
+        XCTAssertEqual(scene.transition.stateMachine.state, .settling(.zoomOut, toCompleted: false))
+        XCTAssertEqual(scene.transition.activeTransition?.transitionAnimator.isReversed, true,
+                       "a cancel settle must run the transition animator reversed")
+
+        // Re-grab mid cancel-settle → the reversed animator is stopped and rebuilt (not scrubbed).
+        scene.pan(.began, translation: .zero)
+        XCTAssertEqual(scene.transition.stateMachine.state, .interactive(.zoomOut))
+        let animatorAfterGrab = scene.transition.activeTransition?.transitionAnimator
+        XCTAssertFalse(animatorAfterGrab === animatorBeforeGrab,
+                       "the reversed transition animator must be rebuilt on grab, never scrubbed")
+        XCTAssertEqual(animatorAfterGrab?.isReversed, false, "the rebuilt animator starts forward, paused")
+
+        scene.pan(.changed, translation: CGPoint(x: 0, y: 120))
+        // 2nd release: downward flick → complete.
+        scene.pan(.ended, translation: CGPoint(x: 0, y: 120), velocity: CGPoint(x: 0, y: 1_600))
+
+        waitForExpectations(timeout: 5)
+
+        // Exactly one completeTransition, in the final (complete) direction — no double-fire from the
+        // stopped reversed animator or the frozen first-settle spring.
+        XCTAssertEqual(scene.context.completeTransitionCallCount, 1, "completeTransition must fire exactly once")
+        XCTAssertEqual(scene.context.completeTransitionFlags, [true])
+        // Both settle directions were driven: one cancel then one finish.
+        XCTAssertEqual(scene.context.cancelInteractiveCallCount, 1)
+        XCTAssertEqual(scene.context.finishInteractiveCallCount, 1)
+        // Completed dismiss → source revealed, no scaffolding left, teardown complete.
+        XCTAssertFalse(scene.source.isHidden)
+        XCTAssertEqual(portalCount(in: scene.container), 0)
+        XCTAssertNil(scene.transition.activeTransition)
+        XCTAssertNil(scene.transition.currentDriver)
+        XCTAssertEqual(scene.transition.stateMachine.state, .idle)
+        XCTAssertEqual(spy.didEndCount, 1)
+        XCTAssertEqual(spy.lastResult, ZoomTransition.Result(isCompleted: true, wasInteractive: true, fallbackReason: nil))
+    }
+
     // MARK: - S4: memory
 
     func test_memory_driverInteractionDriverAndPortalDeallocateAfterInteractiveTransition() {
