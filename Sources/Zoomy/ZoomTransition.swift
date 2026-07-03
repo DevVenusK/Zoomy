@@ -47,6 +47,15 @@ public final class ZoomTransition: NSObject {
     var activeTransition: ActiveTransition?
     /// The driver running `activeTransition`, retained here for the transition's duration so it
     /// outlives UIKit's own hold; released alongside `activeTransition` at cleanup.
+    ///
+    /// Ownership note (load-bearing): `TransitionDriver.transition` is a **strong** back-reference,
+    /// so while a transition is in flight this forms a deliberate `ZoomTransition ⇄ TransitionDriver`
+    /// retain pair. That is what guarantees a `ZoomTransition` cannot deallocate while its animators
+    /// are live — so the spec §4 `RestorationToken`/teardown deinit backstop is a genuine no-op
+    /// during an active run, and the barrier's completion closures (which capture `transition`) never
+    /// fire against a freed object. The pair is broken by `cleanup` (`currentDriver = nil`). **If
+    /// `currentDriver` is ever changed to `weak`, this guarantee is lost** — a VC dropped mid-drag
+    /// could free the transition under the running animators and reintroduce a use-after-free.
     var currentDriver: TransitionDriver?
 
     /// The interactive dismiss/pop driver (M6), lazily created the first time the destination is

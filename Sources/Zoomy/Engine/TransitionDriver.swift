@@ -31,6 +31,30 @@ struct ActiveTransition {
     var settleCompleted: Bool = false
 }
 
+/// The result of `makeStagedContext`: the staged views plus the chosen strategy. Passed to
+/// `runNonInteractive` so an interactive setup that falls back can flow into the shared
+/// non-interactive run **on the already-staged context** — staging (and therefore `willBegin` +
+/// the nav backdrop) happens exactly once (M6 review I2).
+struct StagedContext {
+    let animationContext: ZoomAnimationContext
+    let strategy: ZoomTransitionAnimating
+    let contextInfo: ZoomTransition.Context
+    let fallbackReason: ZoomTransition.FallbackReason?
+}
+
+/// The outcome of `setUpInteractive`, so `startInteractiveTransition` knows whether a follow will
+/// drive the transition, whether it already ran to completion non-interactively (fallback), or
+/// whether there was nothing to stage.
+enum InteractiveSetupResult {
+    /// Staged interactively; the follow will drive update/settle.
+    case interactive
+    /// The strategy was a fallback (unresolvable source / Reduce Motion): the transition is already
+    /// animating to completion non-interactively on the single staged context. Nothing to follow.
+    case ranNonInteractive
+    /// There was no view to stage; the caller must complete the (empty) transition.
+    case notStaged
+}
+
 /// `UIViewControllerAnimatedTransitioning` for a single non-interactive zoom (present/dismiss;
 /// push/pop is M4). It owns the *procedure* — state machine, source resolution, the two-animator
 /// completion barrier, single-exit cleanup, and `completeTransition` — while a `Strategy`
@@ -106,6 +130,15 @@ final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
             return
         }
 
+        // 4–6. Prepare, build animators, install the barrier, and start.
+        runNonInteractive(staged: staged, context: context)
+    }
+
+    /// Steps 4–6 of a non-interactive run on an **already-staged** context: prepare, install push/pop
+    /// scaffolding, build the animators, wire the generation-guarded completion barrier, and start.
+    /// Shared by `animateTransition` and by `setUpInteractive`'s fallback so the interactive→fallback
+    /// path stages exactly once (no duplicate `willBegin` / leaked dimming — M6 review I2).
+    private func runNonInteractive(staged: StagedContext, context: UIViewControllerContextTransitioning) {
         // 4. prepare → (push/pop) bar snapshot + bounds sentinel below the portal → makeAnimators.
         staged.strategy.prepare(using: staged.animationContext)
         installPushPopScaffolding(using: staged.animationContext)
@@ -155,21 +188,32 @@ final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
     /// (no geometry — the driver follows the finger directly and springs the geometry at settle).
     /// Begins the state machine interactively only once a real zoom (resolved source) is assured.
     ///
-    /// Returns `false` when the source can't be resolved (no portal to fly): the caller falls back
-    /// to `animateTransition`, so a drag with a vanished source degrades to a plain animated close
-    /// rather than a broken interactive one.
-    @discardableResult
-    func setUpInteractive(using context: UIViewControllerContextTransitioning) -> Bool {
-        guard let staged = makeStagedContext(using: context, isInteractive: true),
-              let zoomAnimator = staged.strategy as? ZoomAnimator else {
-            return false
+    /// When the strategy is a fallback (source can't be resolved / Reduce Motion), there is no
+    /// portal to fly interactively, so it flows into the shared non-interactive run **on the same
+    /// staged context** (`.ranNonInteractive`) — staging happens exactly once, so `willBegin` fires
+    /// once and no second nav dimming view leaks (M6 review I2). Returns `.notStaged` when there was
+    /// nothing to stage.
+    func setUpInteractive(using context: UIViewControllerContextTransitioning) -> InteractiveSetupResult {
+        guard let staged = makeStagedContext(using: context, isInteractive: true) else {
+            return .notStaged
+        }
+
+        guard let zoomAnimator = staged.strategy as? ZoomAnimator else {
+            // Fallback strategy: run the plain animated close on the already-staged context.
+            let effects = transition.stateMachine.handle(.begin(.zoomOut, interactive: false))
+            if effects.contains(.rejectBegin) {
+                ZoomyAssert.fail("TransitionDriver.setUpInteractive reached with a non-idle state machine")
+                return .notStaged
+            }
+            runNonInteractive(staged: staged, context: context)
+            return .ranNonInteractive
         }
 
         // Only now that a real zoom is assured do we take the state machine interactive.
         let effects = transition.stateMachine.handle(.begin(.zoomOut, interactive: true))
         if effects.contains(.rejectBegin) {
             ZoomyAssert.fail("TransitionDriver.setUpInteractive reached with a non-idle state machine")
-            return false
+            return .notStaged
         }
 
         zoomAnimator.prepareInteractive(using: staged.animationContext)
@@ -192,7 +236,7 @@ final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
         active.interactive = true
         transition.activeTransition = active
         transition.currentDriver = self
-        return true
+        return .interactive
     }
 
     /// Everything `animateTransition` does between the state-machine `begin` and `prepare`: resolve
@@ -202,12 +246,7 @@ final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
     private func makeStagedContext(
         using context: UIViewControllerContextTransitioning,
         isInteractive: Bool
-    ) -> (
-        animationContext: ZoomAnimationContext,
-        strategy: ZoomTransitionAnimating,
-        contextInfo: ZoomTransition.Context,
-        fallbackReason: ZoomTransition.FallbackReason?
-    )? {
+    ) -> StagedContext? {
         let container = context.containerView
 
         // The "zoomed" side is the destination on the way in, the departing VC on the way out.
@@ -327,7 +366,12 @@ final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
             finalFrame: finalFrame
         )
 
-        return (animationContext, strategy, contextInfo, fallbackReason)
+        return StagedContext(
+            animationContext: animationContext,
+            strategy: strategy,
+            contextInfo: contextInfo,
+            fallbackReason: fallbackReason
+        )
     }
 
     /// UIKit's teardown hook. In the normal path the barrier has already cleaned up (guarded by

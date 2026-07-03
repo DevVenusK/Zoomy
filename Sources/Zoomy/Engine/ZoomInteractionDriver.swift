@@ -143,18 +143,23 @@ final class ZoomInteractionDriver: NSObject, UIViewControllerInteractiveTransiti
         }
 
         // Interactive staging + a paused-at-0 transition animator. If the source has vanished there
-        // is no portal to fly, so degrade to the plain animated close (the drag becomes inert).
-        guard animationDriver.setUpInteractive(using: context) else {
-            animationDriver.animateTransition(using: context)
-            return
-        }
-
-        lockTopScrollViewIfNeeded()
-        seedFollowModel()
-
-        if !wantsInteractiveStart {
-            // Vended for a mid-flight grab: hold at the start until a gesture takes over.
-            context.pauseInteractiveTransition()
+        // is no portal to fly, so `setUpInteractive` itself runs the plain animated close on the
+        // single staged context (the drag becomes inert) — staging happens exactly once, so no
+        // duplicate `willBegin` or leaked dimming (M6 review I2).
+        switch animationDriver.setUpInteractive(using: context) {
+        case .interactive:
+            lockTopScrollViewIfNeeded()
+            seedFollowModel()
+            if !wantsInteractiveStart {
+                // Vended for a mid-flight grab: hold at the start until a gesture takes over.
+                context.pauseInteractiveTransition()
+            }
+        case .ranNonInteractive:
+            // Already animating to completion on the staged context — nothing to follow.
+            break
+        case .notStaged:
+            // No view to stage — complete so UIKit isn't left waiting.
+            context.completeTransition(!context.transitionWasCancelled)
         }
     }
 
@@ -176,9 +181,13 @@ final class ZoomInteractionDriver: NSObject, UIViewControllerInteractiveTransiti
     private func handlePanBegan(_ gesture: UIPanGestureRecognizer) {
         switch transition.stateMachine.state {
         case .idle:
-            // Gesture-initiated dismissal. Trigger it; UIKit synchronously calls
-            // `startInteractiveTransition`, which stages the transition and seeds the follow.
-            guard wantsInteractiveStart else { return }
+            // Gesture-initiated dismissal. `wantsInteractiveStart` is *not* gated on here: it is
+            // only turned on when the adapter/nav-delegate vend the driver, and that vend happens
+            // *inside* `triggerDismissal`'s `dismiss()`/`pop()` — so gating begin on it would be a
+            // chicken-and-egg deadlock (the flag can never be true before the drag it enables).
+            // Legitimacy is already guaranteed by `gestureRecognizerShouldBegin` (downward-from-top,
+            // scroll-at-top, not VoiceOver-suppressed). Triggering the dismissal makes the gesture
+            // active, so the vend then sees `isGestureActive == true` and drives interactively.
             if transition.configuration.resignsFirstResponders {
                 gesture.view?.endEditing(true)
             }
@@ -498,7 +507,12 @@ extension ZoomInteractionDriver: UIGestureRecognizerDelegate {
         if let scrollView = topScrollView(in: view), !isScrolledToTop(scrollView) { return false }
 
         switch transition.stateMachine.state {
-        case .idle: return wantsInteractiveStart
+        case .idle:
+            // A fresh gesture-initiated dismiss. Not gated on `wantsInteractiveStart` (see
+            // `handlePanBegan`): the flag is only vended *during* the dismissal this begin triggers,
+            // so requiring it here would deadlock the built-in pan dismiss. The downward-from-top,
+            // scroll-at-top, and VoiceOver checks above already established legitimate intent.
+            return true
         case .animating, .settling: return true
         case .interactive: return false
         }
