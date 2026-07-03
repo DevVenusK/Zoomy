@@ -16,6 +16,19 @@ struct ActiveTransition {
     var didCleanUp: Bool = false
     let contextInfo: ZoomTransition.Context
     var fallbackReason: ZoomTransition.FallbackReason?
+
+    // MARK: Interactive (M6)
+
+    /// `true` for a gesture-driven run (`ZoomInteractionDriver`); drives `wasInteractive` in the
+    /// reported `Result` and selects the self-decided completion flag over the context's.
+    var interactive: Bool = false
+    /// Bumped on every settle and on every grab. A barrier completion captures the generation live
+    /// at the moment it is attached and no-ops if it no longer matches — so the `finishAnimation`
+    /// a grab fires on the springs it is freezing can never prematurely trip the barrier (§4/§8).
+    var barrierGeneration: Int = 0
+    /// The completion flag the *interactive* barrier reports (we decide it at release; the mock
+    /// context's `transitionWasCancelled` is not authoritative for a self-driven transition).
+    var settleCompleted: Bool = false
 }
 
 /// `UIViewControllerAnimatedTransitioning` for a single non-interactive zoom (present/dismiss;
@@ -61,6 +74,107 @@ final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
             return
         }
 
+        // 2–3. Shared staging (willBegin, source resolution, dimming/backdrop, animation context).
+        guard let staged = makeStagedContext(using: context, isInteractive: false) else {
+            // Nothing to animate — behave like the system default.
+            transition.stateMachine.handle(.allAnimatorsFinished)
+            context.completeTransition(true)
+            return
+        }
+
+        // 4. prepare → makeAnimators.
+        staged.strategy.prepare(using: staged.animationContext)
+        let (transitionAnimator, geometryAnimators) = staged.strategy.makeAnimators(using: staged.animationContext)
+
+        let active = ActiveTransition(
+            context: context,
+            animationContext: staged.animationContext,
+            strategy: staged.strategy,
+            transitionAnimator: transitionAnimator,
+            geometryAnimators: geometryAnimators,
+            pendingAnimatorCount: 1 + geometryAnimators.count,
+            contextInfo: staged.contextInfo,
+            fallbackReason: staged.fallbackReason
+        )
+        transition.activeTransition = active
+        transition.currentDriver = self
+
+        // 5. Completion barrier — every animator decrements; the last one fires the barrier.
+        let onAnimatorFinished: (UIViewAnimatingPosition) -> Void = { [weak self, weak transition] _ in
+            guard let self, let transition, var running = transition.activeTransition, !running.didCleanUp else { return }
+            running.pendingAnimatorCount -= 1
+            transition.activeTransition = running
+            if running.pendingAnimatorCount <= 0 {
+                self.completionBarrierFired()
+            }
+        }
+        transitionAnimator.addCompletion(onAnimatorFinished)
+        geometryAnimators.forEach { $0.addCompletion(onAnimatorFinished) }
+
+        // 6. Start the geometry animators first so the portal's model bounds are already the
+        //    final size when the transition animator's corner-radius clamp reads them.
+        active.geometryAnimators.forEach { $0.startAnimation() }
+        active.transitionAnimator.startAnimation()
+    }
+
+    // MARK: - Interactive setup (M6)
+
+    /// Staging entry point for the `ZoomInteractionDriver`: performs the same source resolution and
+    /// view staging as `animateTransition`, but builds only a **paused-at-0 transition animator**
+    /// (no geometry — the driver follows the finger directly and springs the geometry at settle).
+    /// Begins the state machine interactively only once a real zoom (resolved source) is assured.
+    ///
+    /// Returns `false` when the source can't be resolved (no portal to fly): the caller falls back
+    /// to `animateTransition`, so a drag with a vanished source degrades to a plain animated close
+    /// rather than a broken interactive one.
+    @discardableResult
+    func setUpInteractive(using context: UIViewControllerContextTransitioning) -> Bool {
+        guard let staged = makeStagedContext(using: context, isInteractive: true),
+              let zoomAnimator = staged.strategy as? ZoomAnimator else {
+            return false
+        }
+
+        // Only now that a real zoom is assured do we take the state machine interactive.
+        let effects = transition.stateMachine.handle(.begin(.zoomOut, interactive: true))
+        if effects.contains(.rejectBegin) {
+            ZoomyAssert.fail("TransitionDriver.setUpInteractive reached with a non-idle state machine")
+            return false
+        }
+
+        zoomAnimator.prepareInteractive(using: staged.animationContext)
+        let transitionAnimator = zoomAnimator.makeTransitionAnimator(using: staged.animationContext)
+        // Move to `.active` and pause at fractionComplete 0 so it can be scrubbed by the follow.
+        transitionAnimator.pauseAnimation()
+
+        var active = ActiveTransition(
+            context: context,
+            animationContext: staged.animationContext,
+            strategy: staged.strategy,
+            transitionAnimator: transitionAnimator,
+            geometryAnimators: [],
+            pendingAnimatorCount: 0,
+            contextInfo: staged.contextInfo,
+            fallbackReason: staged.fallbackReason
+        )
+        active.interactive = true
+        transition.activeTransition = active
+        transition.currentDriver = self
+        return true
+    }
+
+    /// Everything `animateTransition` does between the state-machine `begin` and `prepare`: resolve
+    /// the zoomed view, report `willBegin`, resolve/validate the source, pick the strategy and build
+    /// geometry, install dimming/backdrop, and assemble the `ZoomAnimationContext`. Shared by the
+    /// non-interactive and interactive setup paths. Returns `nil` when there is no view to animate.
+    private func makeStagedContext(
+        using context: UIViewControllerContextTransitioning,
+        isInteractive: Bool
+    ) -> (
+        animationContext: ZoomAnimationContext,
+        strategy: ZoomTransitionAnimating,
+        contextInfo: ZoomTransition.Context,
+        fallbackReason: ZoomTransition.FallbackReason?
+    )? {
         let container = context.containerView
 
         // The "zoomed" side is the destination on the way in, the departing VC on the way out.
@@ -77,10 +191,7 @@ final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
 
         guard let zoomedViewController = zoomedVC,
               let zoomedView = view(for: zoomedViewController, phase: phase, context: context) else {
-            // Nothing to animate — behave like the system default.
-            transition.stateMachine.handle(.allAnimatorsFinished)
-            context.completeTransition(true)
-            return
+            return nil
         }
 
         let contextInfo = ZoomTransition.Context(
@@ -88,15 +199,15 @@ final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
             sourceViewController: presenterVC,
             phase: phase,
             operation: operation,
-            isInteractive: false
+            isInteractive: isInteractive
         )
 
-        // 2. willBegin — reported *before* source resolution so the app can restore layout.
+        // willBegin — reported *before* source resolution so the app can restore layout.
         transition.reportWillBegin(contextInfo)
 
         let finalFrame = context.finalFrame(for: zoomedViewController)
 
-        // 3. Source resolution → pick strategy + build geometry.
+        // Source resolution → pick strategy + build geometry.
         let resolution = SourceViewResolver.resolve(
             provider: transition.sourceViewProvider,
             context: contextInfo,
@@ -149,9 +260,6 @@ final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
             dimmingView = (presentedVC.presentationController as? ZoomPresentationController)?.dimmingView
         }
 
-        let portal = PortalView(frame: .zero)
-        let token = RestorationToken()
-
         let animationContext = ZoomAnimationContext(
             containerView: container,
             phase: phase,
@@ -161,46 +269,14 @@ final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
             resolvedSource: resolvedSource,
             geometry: geometry,
             configuration: transition.configuration,
-            restorationToken: token,
+            restorationToken: RestorationToken(),
             dimmingView: dimmingView,
             presenterView: presenterView,
-            portal: portal,
+            portal: PortalView(frame: .zero),
             finalFrame: finalFrame
         )
 
-        // 4. prepare → makeAnimators.
-        strategy.prepare(using: animationContext)
-        let (transitionAnimator, geometryAnimators) = strategy.makeAnimators(using: animationContext)
-
-        let active = ActiveTransition(
-            context: context,
-            animationContext: animationContext,
-            strategy: strategy,
-            transitionAnimator: transitionAnimator,
-            geometryAnimators: geometryAnimators,
-            pendingAnimatorCount: 1 + geometryAnimators.count,
-            contextInfo: contextInfo,
-            fallbackReason: fallbackReason
-        )
-        transition.activeTransition = active
-        transition.currentDriver = self
-
-        // 5. Completion barrier — every animator decrements; the last one fires the barrier.
-        let onAnimatorFinished: (UIViewAnimatingPosition) -> Void = { [weak self, weak transition] _ in
-            guard let self, let transition, var running = transition.activeTransition, !running.didCleanUp else { return }
-            running.pendingAnimatorCount -= 1
-            transition.activeTransition = running
-            if running.pendingAnimatorCount <= 0 {
-                self.completionBarrierFired()
-            }
-        }
-        transitionAnimator.addCompletion(onAnimatorFinished)
-        geometryAnimators.forEach { $0.addCompletion(onAnimatorFinished) }
-
-        // 6. Start the geometry animators first so the portal's model bounds are already the
-        //    final size when the transition animator's corner-radius clamp reads them.
-        active.geometryAnimators.forEach { $0.startAnimation() }
-        active.transitionAnimator.startAnimation()
+        return (animationContext, strategy, contextInfo, fallbackReason)
     }
 
     /// UIKit's teardown hook. In the normal path the barrier has already cleaned up (guarded by
@@ -246,8 +322,10 @@ final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
 
     /// Single exit (TECH_SPEC §7.9): strategy teardown → token restore → a11y announce → drop
     /// the active transition. Idempotent via `didCleanUp`. The caller performs
-    /// `completeTransition` / `reportDidEnd` afterwards.
-    private func cleanup(finished: Bool) {
+    /// `completeTransition` / `reportDidEnd` afterwards. Reused by `ZoomInteractionDriver` for the
+    /// interactive settle so both paths share one teardown (and one `navigationOwnedDimmingView`
+    /// owner).
+    func cleanup(finished: Bool) {
         guard var active = transition.activeTransition, !active.didCleanUp else { return }
         active.didCleanUp = true
         transition.activeTransition = active

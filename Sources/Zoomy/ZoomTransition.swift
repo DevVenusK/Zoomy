@@ -19,8 +19,15 @@ public final class ZoomTransition: NSObject {
     public let configuration: Configuration
     public weak var delegate: ZoomTransitionDelegate?
 
-    /// Non-nil once interactive dismissal has been installed (M6 — always `nil` for now).
-    public var dismissalPanGesture: UIPanGestureRecognizer? { nil }
+    /// The interactive dismiss/pop pan recognizer, once it has been installed on the destination
+    /// view (M6). `nil` until the destination finishes appearing and the driver installs it, or
+    /// when `configuration.interactiveDismissal == .disabled`.
+    public var dismissalPanGesture: UIPanGestureRecognizer? {
+        guard configuration.interactiveDismissal == .pan,
+              let gesture = interactionDriver?.panGesture,
+              gesture.view != nil else { return nil }
+        return gesture
+    }
 
     let sourceViewProvider: SourceViewProvider
     weak var attachedViewController: UIViewController?
@@ -37,6 +44,22 @@ public final class ZoomTransition: NSObject {
     /// The driver running `activeTransition`, retained here for the transition's duration so it
     /// outlives UIKit's own hold; released alongside `activeTransition` at cleanup.
     var currentDriver: TransitionDriver?
+
+    /// The interactive dismiss/pop driver (M6), lazily created the first time the destination is
+    /// eligible for an interactive dismissal. Retained for the transition's whole lifetime (not
+    /// dropped at cleanup) so a cancelled drag can be re-grabbed and the installed pan recognizer's
+    /// weak target stays alive; deallocates with the transition (i.e. with its view controller).
+    var interactionDriver: ZoomInteractionDriver?
+
+    /// Returns the (lazily created) interactive driver for `operation`, memoised across dismissals.
+    /// A transition instance drives exactly one destination, so its interactive operation
+    /// (`.dismiss` for modal, `.pop` for navigation) is fixed on first use.
+    func makeInteractionDriver(operation: Operation) -> ZoomInteractionDriver {
+        if let existing = interactionDriver { return existing }
+        let driver = ZoomInteractionDriver(transition: self, phase: .disappearing, operation: operation)
+        interactionDriver = driver
+        return driver
+    }
 
     public init(configuration: Configuration = .default, sourceViewProvider: @escaping SourceViewProvider) {
         self.configuration = configuration
