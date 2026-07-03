@@ -12,10 +12,19 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     ) {
         guard let windowScene = scene as? UIWindowScene else { return }
         let window = UIWindow(windowScene: windowScene)
-        let (tabBarController, pushGrid, modalGrid) = makeRootTabBarController()
+        let (tabBarController, pushGrid, modalGrid, torture) = makeRootTabBarController()
         window.rootViewController = tabBarController
         window.makeKeyAndVisible()
         self.window = window
+
+        // Screenshot / UI-test affordance: jump to the Torture tab and auto-trigger the source-
+        // offscreen fallback present so the cross-dissolve fallback can be captured. No-op otherwise.
+        if ProcessInfo.processInfo.arguments.contains("-zoomyTortureFallback") {
+            tabBarController.selectedIndex = 2
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                torture.triggerFallbackPresentForDemo()
+            }
+        }
 
         // Screenshot / UI-test affordance: jump to the Modal tab and auto-present the first item
         // so the zoom transition can be captured without a synthesized tap. No-op otherwise.
@@ -40,7 +49,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         }
     }
 
-    private func makeRootTabBarController() -> (UITabBarController, GridViewController, GridViewController) {
+    private func makeRootTabBarController()
+        -> (UITabBarController, GridViewController, GridViewController, TortureViewController) {
         let pushGrid = GridViewController()
         pushGrid.title = "Push"
         let pushTab = UINavigationController(rootViewController: pushGrid)
@@ -62,8 +72,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             tag: 1
         )
 
-        let tortureTab = UIViewController()
-        tortureTab.view.backgroundColor = .systemBackground
+        // Torture tab (M7 §7): manual-QA harness for the edge cases that can't be unit-tested. Wrapped
+        // in a navigation controller (with the Zoomy proxy) so the hidesBottomBarWhenPushed push
+        // scenario has a nav stack and a tab bar to snapshot.
+        let torture = TortureViewController()
+        let tortureTab = UINavigationController(rootViewController: torture)
+        tortureTab.enableZoomTransitions()
         tortureTab.tabBarItem = UITabBarItem(
             title: "Torture",
             image: UIImage(systemName: "tornado"),
@@ -72,6 +86,6 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
         let tabBarController = UITabBarController()
         tabBarController.viewControllers = [pushTab, modalTab, tortureTab]
-        return (tabBarController, pushGrid, modalTab)
+        return (tabBarController, pushGrid, modalTab, torture)
     }
 }
