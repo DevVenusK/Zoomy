@@ -231,7 +231,13 @@ final class ZoomInteractionDriver: NSObject, UIViewControllerInteractiveTransiti
         // 5. Fresh geometry spring from the portal's current state → target, seeded with the
         //    release velocity, plus the matching corner morph.
         let currentRect = portal.layer.presentation()?.frame ?? portal.frame
-        let remaining = CGPoint(x: targetRect.midX - currentRect.midX, y: targetRect.midY - currentRect.midY)
+        // Normalise against the remaining *distance magnitude* per axis (the target can be above or
+        // below the portal, so a signed delta would mis-scale via the helper's `max(_, 1)` floor);
+        // the velocity's own sign carries the direction into the spring.
+        let remaining = CGPoint(
+            x: abs(targetRect.midX - currentRect.midX),
+            y: abs(targetRect.midY - currentRect.midY)
+        )
         let initialVelocity = SpringConverter.normalizedVelocity(lastGestureVelocity, remainingDistance: remaining)
 
         let geometryAnimators = (active.strategy as? ZoomAnimator)?.makeGeometryAnimators(
