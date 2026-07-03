@@ -13,7 +13,7 @@ dismiss/pop built in.
 
 - **iOS 15+**, Swift 5.9+, UIKit only
 - **Zero dependencies**
-- 5 public types, everything else internal
+- Small public surface (`ZoomTransition` + two extension entry points), everything else internal
 
 ## Contents
 
