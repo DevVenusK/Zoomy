@@ -196,13 +196,6 @@ extension GridViewController {
         navigationController?.pushViewController(detail, animated: true)
     }
 
-    /// Screenshot / UI-test affordance: present the first item's detail without a tap. Inert
-    /// unless invoked from `SceneDelegate` under the `-zoomyDemoPresent` launch argument.
-    func presentFirstItemForDemo() {
-        guard mode == .modal, let first = items.first else { return }
-        presentZoomDetail(for: first)
-    }
-
     /// Screenshot / UI-test affordance: push the first item's detail without a tap. Inert unless
     /// invoked from `SceneDelegate` under the `-zoomyDemoPush` launch argument.
     func pushFirstItemForDemo() {

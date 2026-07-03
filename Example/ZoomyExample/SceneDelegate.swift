@@ -12,7 +12,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     ) {
         guard let windowScene = scene as? UIWindowScene else { return }
         let window = UIWindow(windowScene: windowScene)
-        let (tabBarController, pushGrid, modalGrid, torture) = makeRootTabBarController()
+        let (tabBarController, pushGrid, torture) = makeRootTabBarController()
         window.rootViewController = tabBarController
         window.makeKeyAndVisible()
         self.window = window
@@ -23,15 +23,6 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             tabBarController.selectedIndex = 2
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 torture.triggerFallbackPresentForDemo()
-            }
-        }
-
-        // Screenshot / UI-test affordance: jump to the Modal tab and auto-present the first item
-        // so the zoom transition can be captured without a synthesized tap. No-op otherwise.
-        if ProcessInfo.processInfo.arguments.contains("-zoomyDemoPresent") {
-            tabBarController.selectedIndex = 1
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                modalGrid.presentFirstItemForDemo()
             }
         }
 
@@ -50,7 +41,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     private func makeRootTabBarController()
-        -> (UITabBarController, GridViewController, GridViewController, TortureViewController) {
+        -> (UITabBarController, GridViewController, TortureViewController) {
         let pushGrid = GridViewController()
         pushGrid.title = "Push"
         let pushTab = UINavigationController(rootViewController: pushGrid)
@@ -86,6 +77,6 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
         let tabBarController = UITabBarController()
         tabBarController.viewControllers = [pushTab, modalTab, tortureTab]
-        return (tabBarController, pushGrid, modalTab, torture)
+        return (tabBarController, pushGrid, torture)
     }
 }
