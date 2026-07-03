@@ -37,18 +37,35 @@ final class ModalTransitioningAdapter: NSObject, UIViewControllerTransitioningDe
         return TransitionDriver(transition: transition, phase: .disappearing, operation: .dismiss)
     }
 
-    // TODO(M6): vend a ZoomInteractionDriver when `configuration.interactiveDismissal == .pan`.
+    /// Interactive dismissal (§6): vend the pan driver **only when a gesture is actually driving
+    /// the dismiss** (`isGestureActive`). A programmatic `dismiss(animated:)` (close button) leaves
+    /// the recognizer idle, so this returns `nil` and 3b's non-interactive `TransitionDriver` runs
+    /// unchanged (§5).
     func interactionControllerForDismissal(
         using animator: UIViewControllerAnimatedTransitioning
     ) -> UIViewControllerInteractiveTransitioning? {
-        nil
+        guard transition.configuration.interactiveDismissal == .pan,
+              let driver = transition.interactionDriver, driver.isGestureActive else {
+            return nil
+        }
+        driver.wantsInteractiveStart = true
+        driver.animationDriver = animator as? TransitionDriver
+        return driver
     }
 
-    // TODO(M6): vend the driver (wantsInteractiveStart = false) so a grab mid-present is legal.
+    /// Vend the driver (started non-interactively) so a grab during the present zoom is legal (§6).
+    /// The present runs animated via `startInteractiveTransition`'s present-guard (which forwards to
+    /// the animator); the driver only takes over if a pan later grabs it. A grab mid-present is only
+    /// reachable once the recognizer is installed (`presentationTransitionDidEnd`), i.e. after the
+    /// present completes — full mid-present takeover is deferred (TODO(M7)).
     func interactionControllerForPresentation(
         using animator: UIViewControllerAnimatedTransitioning
     ) -> UIViewControllerInteractiveTransitioning? {
-        nil
+        guard transition.configuration.interactiveDismissal == .pan else { return nil }
+        let driver = transition.makeInteractionDriver(operation: .dismiss)
+        driver.wantsInteractiveStart = false
+        driver.animationDriver = animator as? TransitionDriver
+        return driver
     }
 
     func presentationController(

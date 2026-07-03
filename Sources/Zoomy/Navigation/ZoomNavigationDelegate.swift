@@ -109,14 +109,24 @@ public final class ZoomNavigationDelegate: NSObject, UINavigationControllerDeleg
         }
     }
 
-    /// The zoom drivers vended for push/pop are non-interactive in M4 (interactive pop is M6), so
-    /// there is no interaction controller to pair with one we vended. Anything else is forwarded.
+    /// Pairs our interactive pop driver with the pop `TransitionDriver` we vended, but **only when a
+    /// pan is actually driving the pop** (§6). A programmatic/back-button pop leaves the recognizer
+    /// idle, so the non-interactive driver runs. Any animation controller we didn't vend is
+    /// forwarded downstream.
     public func navigationController(
         _ navigationController: UINavigationController,
         interactionControllerFor animationController: any UIViewControllerAnimatedTransitioning
     ) -> (any UIViewControllerInteractiveTransitioning)? {
-        if animationController is TransitionDriver {
-            // TODO(M6): return the interactive driver when the vended driver drives an interactive pop.
+        if let driver = animationController as? TransitionDriver {
+            if driver.operation == .pop,
+               driver.transition.configuration.interactiveDismissal == .pan,
+               let interactionDriver = driver.transition.interactionDriver,
+               interactionDriver.isGestureActive {
+                interactionDriver.wantsInteractiveStart = true
+                interactionDriver.animationDriver = driver
+                return interactionDriver
+            }
+            // Our own non-interactive pop/push driver — no interaction controller to pair.
             return nil
         }
         return downstream?.navigationController?(navigationController, interactionControllerFor: animationController)
@@ -131,6 +141,18 @@ public final class ZoomNavigationDelegate: NSObject, UINavigationControllerDeleg
         downstream?.navigationController?(navigationController, willShow: viewController, animated: animated)
     }
 
+    /// Installs the interactive pop pan on a destination that was pushed as a zoom (M6). A pushed
+    /// zoom records a `pushPredecessor`, so its presence marks the adjacent detail that can be
+    /// popped interactively. The recognizer's `gestureRecognizerShouldBegin` still gates on a
+    /// downward-from-top drag, so it coexists with the screen's own scrolling.
+    private func installInteractivePopIfNeeded(on viewController: UIViewController) {
+        guard let transition = viewController.zoomTransition,
+              transition.configuration.interactiveDismissal == .pan,
+              transition.pushPredecessor != nil else { return }
+        let driver = transition.makeInteractionDriver(operation: .pop)
+        driver.installGesture(on: viewController.view)
+    }
+
     public func navigationController(
         _ navigationController: UINavigationController,
         didShow viewController: UIViewController,
@@ -139,6 +161,7 @@ public final class ZoomNavigationDelegate: NSObject, UINavigationControllerDeleg
         // `pushPredecessor` is intentionally not cleared here: it is `weak` (auto-nils with the
         // popped VC) and is always overwritten at the next push vend *before* any pop reads it, so
         // it can never be read stale. (§3 lists explicit cleanup as optional.)
+        installInteractivePopIfNeeded(on: viewController)
         downstream?.navigationController?(navigationController, didShow: viewController, animated: animated)
     }
 

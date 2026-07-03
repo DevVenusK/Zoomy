@@ -59,6 +59,16 @@ final class ZoomPresentationController: UIPresentationController {
         }
     }
 
+    override func presentationTransitionDidEnd(_ completed: Bool) {
+        super.presentationTransitionDidEnd(completed)
+        // Install the interactive dismiss pan once the destination is fully on screen (M6). The
+        // recognizer's delegate gates it to a downward-from-top drag, so it coexists with content
+        // scrolling and only fires for an actual dismissal intent.
+        guard completed, transition.configuration.interactiveDismissal == .pan else { return }
+        let driver = transition.makeInteractionDriver(operation: .dismiss)
+        driver.installGesture(on: presentedViewController.view)
+    }
+
     override func dismissalTransitionDidEnd(_ completed: Bool) {
         super.dismissalTransitionDidEnd(completed)
         if completed {
