@@ -52,6 +52,13 @@ public final class ZoomNavigationDelegate: NSObject, UINavigationControllerDeleg
     /// Held `weak` — the navigation controller retains the proxy via an associated object.
     weak var navigationController: UINavigationController?
 
+    /// The edge-swipe pop coordinator (M5), lazily created the first time a zoom screen appears. It
+    /// owns our left-edge pan on the nav view and arbitrates the system `interactivePopGestureRecognizer`
+    /// so a zoom screen's pop is driven by our edge pan while non-zoom screens keep the stock pop.
+    /// Retained here strongly (gesture recognizers hold their targets weakly), released with the proxy
+    /// (i.e. with the navigation controller). Never created on a nav that never shows a zoom screen.
+    private(set) var edgePopCoordinator: ZoomEdgePopCoordinator?
+
     public init(forwardingTo downstream: (any UINavigationControllerDelegate)? = nil) {
         super.init()
         self.downstream = downstream
@@ -137,7 +144,6 @@ public final class ZoomNavigationDelegate: NSObject, UINavigationControllerDeleg
         willShow viewController: UIViewController,
         animated: Bool
     ) {
-        // TODO(M5): install the interactive edge-swipe pop recognizer here.
         downstream?.navigationController?(navigationController, willShow: viewController, animated: animated)
     }
 
@@ -153,6 +159,25 @@ public final class ZoomNavigationDelegate: NSObject, UINavigationControllerDeleg
         driver.installGesture(on: viewController.view)
     }
 
+    /// Installs the edge-swipe pop coordinator (M5) the first time a zoom screen appears — it owns
+    /// our left-edge pan on the nav view and arbitrates the system `interactivePopGestureRecognizer`.
+    /// Gated on the shown VC carrying a `.pan` zoom so a nav that never presents a zoom screen keeps
+    /// its stock edge pop entirely untouched (the coordinator is never created). `installIfNeeded`
+    /// itself is idempotent, so re-entry across further `didShow`s is a no-op.
+    private func installEdgeSwipePopIfNeeded(
+        on navigationController: UINavigationController,
+        topViewController: UIViewController
+    ) {
+        guard let transition = topViewController.zoomTransition,
+              transition.configuration.interactiveDismissal == .pan else { return }
+        let coordinator = edgePopCoordinator ?? {
+            let created = ZoomEdgePopCoordinator(navigationController: navigationController)
+            edgePopCoordinator = created
+            return created
+        }()
+        coordinator.installIfNeeded()
+    }
+
     public func navigationController(
         _ navigationController: UINavigationController,
         didShow viewController: UIViewController,
@@ -161,6 +186,7 @@ public final class ZoomNavigationDelegate: NSObject, UINavigationControllerDeleg
         // `pushPredecessor` is intentionally not cleared here: it is `weak` (auto-nils with the
         // popped VC) and is always overwritten at the next push vend *before* any pop reads it, so
         // it can never be read stale. (§3 lists explicit cleanup as optional.)
+        installEdgeSwipePopIfNeeded(on: navigationController, topViewController: viewController)
         installInteractivePopIfNeeded(on: viewController)
         downstream?.navigationController?(navigationController, didShow: viewController, animated: animated)
     }

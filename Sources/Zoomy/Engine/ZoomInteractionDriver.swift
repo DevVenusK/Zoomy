@@ -39,6 +39,13 @@ final class ZoomInteractionDriver: NSObject, UIViewControllerInteractiveTransiti
     /// Installed on the destination's root view once it finishes appearing (see `installGesture`).
     let panGesture: UIPanGestureRecognizer
 
+    /// An *external* pan recognizer currently allowed to drive this same interaction — M5's
+    /// left-edge `UIScreenEdgePanGestureRecognizer` installed on the navigation view. Held `weak`
+    /// (the nav view owns the recognizer; the M5 coordinator owns its dispatch and calls
+    /// `handlePan(_:)` directly). `isGestureActive` consults it so a pop that an edge swipe initiates
+    /// is recognised as gesture-driven at vend time, exactly like the built-in `panGesture`.
+    private weak var externalDrivingGesture: UIPanGestureRecognizer?
+
     /// The non-interactive driver UIKit vended for this transition; reused for staging
     /// (`setUpInteractive`) and the shared single-exit `cleanup`. Retained for the transition's
     /// duration by `transition.currentDriver`, so a `weak` reference here forms no cycle.
@@ -79,9 +86,26 @@ final class ZoomInteractionDriver: NSObject, UIViewControllerInteractiveTransiti
 
     /// `true` while the pan is actually driving a dismissal — the signal the adapter/nav-delegate
     /// use to decide interactive vs. non-interactive at vend time (a programmatic `dismiss` leaves
-    /// the recognizer idle, so §5's non-interactive path runs).
+    /// the recognizer idle, so §5's non-interactive path runs). Considers both the built-in
+    /// `panGesture` and any registered external driver (M5's edge pan), so an edge-swipe-initiated
+    /// pop is vended interactively too.
     var isGestureActive: Bool {
-        panGesture.state == .began || panGesture.state == .changed
+        isActive(panGesture) || isActive(externalDrivingGesture)
+    }
+
+    private func isActive(_ gesture: UIGestureRecognizer?) -> Bool {
+        guard let gesture else { return false }
+        return gesture.state == .began || gesture.state == .changed
+    }
+
+    /// Lets an external recognizer (M5's navigation-view left-edge screen-edge pan) drive this
+    /// interaction through the *same* `handlePan` settle/grab/barrier path. The caller (the edge-pop
+    /// coordinator) owns the recognizer's placement, `shouldBegin` gating, and dispatch — it routes
+    /// updates in by calling `handlePan(_:)` directly. This only teaches `isGestureActive` to see the
+    /// gesture so `interactionControllerFor` pairs the interactive driver at vend time. The reference
+    /// is `weak`, so no retain cycle with the nav view that owns the recognizer.
+    func registerExternalDrivingGesture(_ gesture: UIPanGestureRecognizer) {
+        externalDrivingGesture = gesture
     }
 
     // MARK: - UIViewControllerInteractiveTransitioning
