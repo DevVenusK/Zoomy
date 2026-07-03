@@ -48,6 +48,20 @@ final class DelegateForwardingTests: XCTestCase {
         func animateTransition(using transitionContext: any UIViewControllerContextTransitioning) {}
     }
 
+    /// A downstream that implements only `willShow`/`didShow` and deliberately does *not* implement
+    /// `navigationControllerSupportedInterfaceOrientations` — so it has strictly fewer capabilities
+    /// than `SpyDelegate`, which is what the capability-cache-invalidation test hinges on.
+    private final class PlainDownstream: NSObject, UINavigationControllerDelegate {
+        private(set) var willShowCount = 0
+        private(set) var didShowCount = 0
+        func navigationController(_ navigationController: UINavigationController, willShow viewController: UIViewController, animated: Bool) {
+            willShowCount += 1
+        }
+        func navigationController(_ navigationController: UINavigationController, didShow viewController: UIViewController, animated: Bool) {
+            didShowCount += 1
+        }
+    }
+
     private let nav = UINavigationController()
 
     private var supportedOrientationsSelector: Selector {
@@ -84,25 +98,52 @@ final class DelegateForwardingTests: XCTestCase {
 
     // MARK: - Post-hoc downstream replacement (capability-cache invalidation)
 
-    func test_replacingDownstream_routesToNewDownstreamNotOld_whileAttachedToNav() {
-        let navController = UINavigationController()
+    /// The brief's core bug, gated through a *live* navigation controller so UIKit — not the test —
+    /// originates the delegate query.
+    ///
+    /// `A` (old downstream) does NOT implement `navigationControllerSupportedInterfaceOrientations`;
+    /// `B` (new downstream) does. UIKit caches "this delegate provides no orientation" from when the
+    /// delegate was set with `A`. Reading `nav.supportedInterfaceOrientations` is a UIKit-originated
+    /// call routed through that cache — it can only reach `B` if `downstream`'s setter invalidated
+    /// the cache by re-assigning `nav.delegate`. Dispatching straight at the proxy (the previous
+    /// version of this test) bypassed the cache and so failed to gate the bug; emptying
+    /// `invalidateDelegateCapabilityCache()` now turns this test red (verified — see report Fix round 1).
+    func test_replacingDownstream_onLiveNav_invalidatesCapabilityCache() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let navController = UINavigationController(rootViewController: UIViewController())
+        window.rootViewController = navController
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+
         let proxy = navController.enableZoomTransitions()
 
-        let a = SpyDelegate()
-        let b = SpyDelegate()
+        // A has no orientation opinion — prime UIKit's capability cache while it is the downstream.
+        let a = PlainDownstream()
         proxy.downstream = a
+        _ = navController.supportedInterfaceOrientations
+
+        // B does have one. The swap must invalidate the cache so UIKit re-queries and honours B.
+        let b = SpyDelegate()
+        b.orientationMask = .landscapeLeft
         proxy.downstream = b
 
         XCTAssertTrue(navController.delegate === proxy,
-                      "the proxy must stay installed after the downstream swap (cache re-assignment)")
+                      "the proxy must stay installed as the delegate after the swap")
 
-        _ = (proxy as any UINavigationControllerDelegate).navigationControllerSupportedInterfaceOrientations?(navController)
+        // UIKit-originated query through nav.delegate (NOT a direct dispatch at the proxy).
+        let orientations = navController.supportedInterfaceOrientations
+        XCTAssertEqual(orientations, .landscapeLeft,
+                       "UIKit must honour the new downstream's orientation — only true if the capability cache was invalidated")
+        XCTAssertGreaterThanOrEqual(b.supportedOrientationsCount, 1,
+                                    "the UIKit-originated call must reach the new downstream")
+
+        // And a hand-off call still routes to the new downstream, not the old one.
         proxy.navigationController(navController, willShow: UIViewController(), animated: true)
-
-        XCTAssertEqual(b.supportedOrientationsCount, 1, "the new downstream must receive forwarded calls")
-        XCTAssertEqual(b.willShowCount, 1, "the new downstream must receive handed-off calls")
-        XCTAssertEqual(a.supportedOrientationsCount, 0, "the replaced downstream must receive nothing")
-        XCTAssertEqual(a.willShowCount, 0, "the replaced downstream must receive nothing")
+        XCTAssertEqual(b.willShowCount, 1, "hand-off must reach the new downstream")
+        XCTAssertEqual(a.willShowCount, 0, "the replaced downstream must receive nothing after the swap")
     }
 
     // MARK: - nil downstream
