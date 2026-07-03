@@ -34,9 +34,11 @@ final class ZoomEdgePopCoordinator: NSObject {
 
     /// The delegate the system `interactivePopGestureRecognizer` had before we became its delegate,
     /// preserved so a non-zoom screen keeps its exact stock pop behaviour (we forward `shouldBegin`
-    /// and the other delegate callbacks back to it). Weak — UIKit owns it (typically the nav
-    /// controller's own private interactive-transition object).
-    private(set) weak var originalPopDelegate: (any UIGestureRecognizerDelegate)?
+    /// and the other delegate callbacks back to it). Held strongly: it is UIKit's own private
+    /// interactive-transition object, which never references this coordinator back (no retain
+    /// cycle), and a `weak` hold risked it deallocating out from under us — silently downgrading
+    /// every non-zoom screen's `shouldBegin` to the unconditional-`true` fallback below.
+    private(set) var originalPopDelegate: (any UIGestureRecognizerDelegate)?
 
     /// The driver an in-flight edge swipe is currently feeding, captured at `.began`. Held across the
     /// gesture because `popViewController` updates `nav.topViewController` to the predecessor, so the
