@@ -250,4 +250,50 @@ final class InteractiveCallOrderTests: XCTestCase {
         XCTAssertNil(weakDetail, "destination view controller must deallocate")
         XCTAssertNil(weakPortal, "portal must deallocate after cleanup")
     }
+
+    // MARK: - I2: interactive → fallback stages exactly once
+
+    /// Regression gate for the whole-branch review I2: an interactive start whose source can't be
+    /// resolved falls back, and before the fix that ran `makeStagedContext` twice — reporting
+    /// `willBegin` twice (contract: once per phase) and re-invoking the provider. The fallback must
+    /// now run on the single staged context.
+    func test_interactiveStartWithUnresolvedSource_reportsWillBeginExactlyOnce() {
+        let spy = SpyDelegate()
+        let exp = expectation(description: "interactive fallback didEnd")
+        spy.didEndExpectation = exp
+        let scene = makeInteractiveDismissScene(resolvesSource: false, delegate: spy)
+
+        scene.start()
+        waitForExpectations(timeout: 5)
+
+        XCTAssertEqual(spy.willBeginCount, 1, "willBegin must fire exactly once on the interactive→fallback path")
+        XCTAssertEqual(scene.context.completeTransitionCallCount, 1)
+        XCTAssertEqual(scene.context.completeTransitionFlags, [true])
+        XCTAssertEqual(portalCount(in: scene.container), 0)
+        XCTAssertEqual(spy.didEndCount, 1)
+        XCTAssertEqual(spy.lastResult?.fallbackReason, .sourceUnresolved)
+        XCTAssertNil(scene.transition.activeTransition)
+        XCTAssertEqual(scene.transition.stateMachine.state, .idle)
+    }
+
+    /// The dimming-leak half of I2 (the nav/pop path owns its own dimming view): the double-staging
+    /// installed a second nav dimming view that overwrote `navigationOwnedDimmingView`, so cleanup
+    /// removed only the second and the first leaked into the container as a permanent dark overlay.
+    /// With single staging, no dimming view survives completion.
+    func test_interactivePopFallback_leavesNoDimmingViewInContainer() {
+        let spy = SpyDelegate()
+        let exp = expectation(description: "interactive pop fallback didEnd")
+        spy.didEndExpectation = exp
+        let scene = makeInteractivePopScene(resolvesSource: false, delegate: spy)
+        let dimmingCGColor = scene.transition.configuration.dimmingColor?.cgColor
+
+        scene.start()
+        waitForExpectations(timeout: 5)
+
+        XCTAssertEqual(spy.willBeginCount, 1, "willBegin must fire exactly once")
+        XCTAssertEqual(scene.context.completeTransitionCallCount, 1)
+        let leakedDimming = scene.container.subviews.filter { $0.backgroundColor?.cgColor == dimmingCGColor }
+        XCTAssertEqual(leakedDimming.count, 0, "the interactive→fallback path must not leak a nav dimming view")
+        XCTAssertEqual(portalCount(in: scene.container), 0)
+    }
 }

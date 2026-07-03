@@ -192,4 +192,45 @@ final class FollowInteractionTests: XCTestCase {
         XCTAssertFalse(scene.driver.gestureRecognizerShouldBegin(gesture),
                        "no second recognizer may begin while a follow is already in flight")
     }
+
+    // MARK: - C1: the built-in pan dismiss must begin *before* `wantsInteractiveStart` is vended
+
+    /// Regression gate for the chicken-and-egg deadlock (whole-branch review C1): the flag is only
+    /// turned on when the adapter vends the driver, which happens *inside* the `dismiss()` that the
+    /// gesture triggers. Gating begin on the flag would mean it can never be true in time. With the
+    /// flag still `false` (the real pre-vend state), a downward-from-top drag must still begin.
+    func test_shouldBegin_idleWithoutVendedFlag_beginsAnyway() {
+        let scene = makeInteractiveDismissScene(presetInteractiveStart: false)
+        XCTAssertFalse(scene.driver.wantsInteractiveStart, "precondition: flag is not yet vended")
+        let gesture = makeGesture(in: scene.detail.view, translation: CGPoint(x: 0, y: 20))
+        XCTAssertTrue(scene.driver.gestureRecognizerShouldBegin(gesture),
+                      "a fresh downward-from-top drag must begin even before the vend sets the flag")
+    }
+
+    /// The other half of C1: even after begin, `handlePanBegan(.idle)` must trigger the dismissal
+    /// (which is what makes the gesture active so the vend then sees `isGestureActive`). Before the
+    /// fix its `guard wantsInteractiveStart` returned early, so `dismiss()` never fired.
+    func test_began_idleWithoutVendedFlag_triggersDismissal() {
+        let spy = DismissSpyViewController()
+        let scene = makeInteractiveDismissScene(detail: spy, presetInteractiveStart: false)
+        let gesture = MockPanGestureRecognizer()
+        gesture.mockView = spy.view
+        gesture.mockState = .began
+        gesture.mockTranslation = CGPoint(x: 0, y: 8)
+
+        scene.driver.handlePan(gesture)
+
+        XCTAssertEqual(spy.dismissCallCount, 1,
+                       "a gesture-initiated begin must trigger dismiss even before the flag is vended")
+    }
+
+    /// Regression guard (§5): a *programmatic* dismiss leaves the pan idle, so the adapter must still
+    /// return `nil` (non-interactive) — the C1 fix must not turn every dismiss interactive.
+    func test_programmaticDismiss_idlePan_adapterStaysNonInteractive() {
+        let scene = makeInteractiveDismissScene(presetInteractiveStart: false)
+        XCTAssertFalse(scene.driver.isGestureActive, "precondition: no gesture is driving")
+        let animator = TransitionDriver(transition: scene.transition, phase: .disappearing, operation: .dismiss)
+        let interactionController = scene.transition.modalAdapter.interactionControllerForDismissal(using: animator)
+        XCTAssertNil(interactionController, "an idle-pan (programmatic) dismiss must stay non-interactive")
+    }
 }

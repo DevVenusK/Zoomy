@@ -368,4 +368,34 @@ final class EdgeSwipePopTests: XCTestCase {
         XCTAssertEqual(recognizersBefore, recognizersAfter,
                        "no Zoomy edge pan may be added on a non-zoom nav")
     }
+
+    // MARK: - Ownership graph deallocates with the nav (whole-branch review, recommended)
+
+    /// After a zoom screen installs the proxy + edge coordinator (which captures the system
+    /// recognizer's original delegate **strongly**), releasing the navigation controller must
+    /// deallocate the whole Zoomy graph. This gates that the strong `originalPopDelegate` hold is not
+    /// a retain cycle: if `originalPopDelegate` transitively retained the nav (or the coordinator),
+    /// the nav/proxy/coordinator would survive teardown and these weak refs would stay non-nil.
+    func test_proxyAndCoordinatorDeallocateWithNavigationController() {
+        weak var weakNav: UINavigationController?
+        weak var weakProxy: ZoomNavigationDelegate?
+        weak var weakCoordinator: ZoomEdgePopCoordinator?
+
+        autoreleasepool {
+            let (window, nav, _, detail, _, proxy) = makeWindowedZoomNav()
+            proxy.navigationController(nav, didShow: detail, animated: false) // installs the coordinator
+            XCTAssertNotNil(proxy.edgePopCoordinator, "precondition: a zoom screen installed the coordinator")
+
+            weakNav = nav
+            weakProxy = proxy
+            weakCoordinator = proxy.edgePopCoordinator
+
+            teardown(window)
+        }
+
+        XCTAssertNil(weakNav, "the navigation controller must deallocate")
+        XCTAssertNil(weakProxy, "the ZoomNavigationDelegate proxy must deallocate with the nav")
+        XCTAssertNil(weakCoordinator,
+                     "the edge-pop coordinator must deallocate — a strong originalPopDelegate hold must not be a cycle")
+    }
 }
