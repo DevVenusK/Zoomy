@@ -24,7 +24,13 @@ final class ModalTransitioningAdapter: NSObject, UIViewControllerTransitioningDe
             logReentrantRejection(direction: "present")
             return nil
         }
-        return TransitionDriver(transition: transition, phase: .appearing, operation: .present)
+        // Reduce Motion / VoiceOver (§9): the same driver runs a cross-dissolve instead of the zoom.
+        return TransitionDriver(
+            transition: transition,
+            phase: .appearing,
+            operation: .present,
+            forcedFallbackReason: transition.accessibilityFallbackReason
+        )
     }
 
     func animationController(
@@ -34,7 +40,12 @@ final class ModalTransitioningAdapter: NSObject, UIViewControllerTransitioningDe
             logReentrantRejection(direction: "dismiss")
             return nil
         }
-        return TransitionDriver(transition: transition, phase: .disappearing, operation: .dismiss)
+        return TransitionDriver(
+            transition: transition,
+            phase: .disappearing,
+            operation: .dismiss,
+            forcedFallbackReason: transition.accessibilityFallbackReason
+        )
     }
 
     /// Interactive dismissal (§6): vend the pan driver **only when a gesture is actually driving
@@ -45,6 +56,7 @@ final class ModalTransitioningAdapter: NSObject, UIViewControllerTransitioningDe
         using animator: UIViewControllerAnimatedTransitioning
     ) -> UIViewControllerInteractiveTransitioning? {
         guard transition.configuration.interactiveDismissal == .pan,
+              !transition.suppressesInteractionForAccessibility,
               let driver = transition.interactionDriver, driver.isGestureActive else {
             return nil
         }

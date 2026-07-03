@@ -30,6 +30,10 @@ public final class ZoomTransition: NSObject {
     }
 
     let sourceViewProvider: SourceViewProvider
+    /// The accessibility flags the vend-time gating (§9) reads. Defaults to the live `UIAccessibility`
+    /// state; swapped for a stub in tests (those flags can't be toggled from a unit test). Internal
+    /// seam only — never public.
+    var accessibilityEnvironment: any AccessibilityEnvironment = SystemAccessibilityEnvironment()
     weak var attachedViewController: UIViewController?
     /// Recorded when this transition's destination is pushed, so a subsequent pop can tell
     /// whether it's returning to the view controller it was pushed *from* (M4).

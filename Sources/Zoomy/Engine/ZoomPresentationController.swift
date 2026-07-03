@@ -81,6 +81,13 @@ final class ZoomPresentationController: UIPresentationController {
         return true
     }
 
-    // TODO(M7): override `viewWillTransition(to:with:)` to `forceFinish(.sizeChange)` an
-    // in-flight transition on rotation.
+    /// Rotation / size-class change (§7.10): a modal zoom in flight is fast-forwarded to a clean
+    /// completion rather than left straddling the resize. Once `activeTransition` clears,
+    /// `containerViewWillLayoutSubviews` stamps the presented view to the new container bounds.
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        if transition.activeTransition != nil {
+            transition.currentDriver?.forceFinish(.sizeChange)
+        }
+    }
 }

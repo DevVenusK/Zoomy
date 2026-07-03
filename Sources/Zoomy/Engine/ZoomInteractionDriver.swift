@@ -79,9 +79,27 @@ final class ZoomInteractionDriver: NSObject, UIViewControllerInteractiveTransiti
 
     /// Installs the pan recognizer on the destination's root view (idempotent). Called once the
     /// destination has finished appearing (modal: `presentationTransitionDidEnd`; nav: `didShow`).
+    /// Under VoiceOver the recognizer is installed **disabled** (§9): interactive dismissal is
+    /// suppressed so a swipe never fights VoiceOver's own gestures; the non-interactive cross-dissolve
+    /// path handles the dismissal instead.
     func installGesture(on view: UIView) {
         guard panGesture.view !== view else { return }
         view.addGestureRecognizer(panGesture)
+        panGesture.isEnabled = !transition.suppressesInteractionForAccessibility
+    }
+
+    /// Flushes our recognizers (`isEnabled` toggle) so an in-flight gesture is cancelled before a
+    /// `forceFinish` fast-forwards the transition (§7.10 step 1). Restores the prior enabled state so
+    /// a VoiceOver-disabled pan stays disabled.
+    func flushGestures() {
+        let wasEnabled = panGesture.isEnabled
+        panGesture.isEnabled = false
+        panGesture.isEnabled = wasEnabled
+        if let external = externalDrivingGesture {
+            let externalEnabled = external.isEnabled
+            external.isEnabled = false
+            external.isEnabled = externalEnabled
+        }
     }
 
     /// `true` while the pan is actually driving a dismissal — the signal the adapter/nav-delegate
@@ -387,6 +405,13 @@ final class ZoomInteractionDriver: NSObject, UIViewControllerInteractiveTransiti
         transition.stateMachine.handle(.allAnimatorsFinished)
         animationDriver?.cleanup(finished: completed)
         context.completeTransition(completed)
+
+        // iOS 15 ghosting workaround (§7.8): after a *cancelled* interactive pop, force the nav bar to
+        // re-lay out so a large-title bar doesn't leave a ghost of the aborted transition.
+        if operation == .pop, !completed {
+            transition.attachedViewController?.navigationController?.navigationBar.setNeedsLayout()
+        }
+
         transition.reportDidEnd(
             contextInfo,
             result: ZoomTransition.Result(isCompleted: completed, wasInteractive: true, fallbackReason: fallbackReason)
@@ -463,6 +488,8 @@ extension ZoomInteractionDriver: UIGestureRecognizerDelegate {
     /// gesture-initiated driver) or a grab (animating/settling). See §2.
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard transition.configuration.interactiveDismissal == .pan else { return false }
+        // VoiceOver suppresses interactive dismissal entirely (§9) — the swipe must not begin.
+        guard !transition.suppressesInteractionForAccessibility else { return false }
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer, let view = pan.view else { return false }
 
         let translation = pan.translation(in: view)

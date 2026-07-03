@@ -84,7 +84,11 @@ public final class ZoomNavigationDelegate: NSObject, UINavigationControllerDeleg
         case .push:
             if let transition = toVC.zoomTransition, transition.stateMachine.state == .idle {
                 transition.pushPredecessor = fromVC
-                return TransitionDriver(transition: transition, phase: .appearing, operation: .push)
+                // Reduce Motion / VoiceOver (§9): the same driver runs a cross-dissolve instead.
+                return TransitionDriver(
+                    transition: transition, phase: .appearing, operation: .push,
+                    forcedFallbackReason: transition.accessibilityFallbackReason
+                )
             }
             return downstream?.navigationController?(
                 navigationController, animationControllerFor: operation, from: fromVC, to: toVC
@@ -93,7 +97,10 @@ public final class ZoomNavigationDelegate: NSObject, UINavigationControllerDeleg
         case .pop:
             if let transition = fromVC.zoomTransition {
                 if toVC === transition.pushPredecessor, transition.stateMachine.state == .idle {
-                    return TransitionDriver(transition: transition, phase: .disappearing, operation: .pop)
+                    return TransitionDriver(
+                        transition: transition, phase: .disappearing, operation: .pop,
+                        forcedFallbackReason: transition.accessibilityFallbackReason
+                    )
                 }
                 // A zoom is attached but this isn't the single adjacent pop it was pushed as
                 // (multi-level pop, or a non-idle/reentrant state). The system default runs.
@@ -127,6 +134,7 @@ public final class ZoomNavigationDelegate: NSObject, UINavigationControllerDeleg
         if let driver = animationController as? TransitionDriver {
             if driver.operation == .pop,
                driver.transition.configuration.interactiveDismissal == .pan,
+               !driver.transition.suppressesInteractionForAccessibility,
                let interactionDriver = driver.transition.interactionDriver,
                interactionDriver.isGestureActive {
                 interactionDriver.wantsInteractiveStart = true

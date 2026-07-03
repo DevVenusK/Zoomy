@@ -88,6 +88,7 @@ final class ZoomEdgePopCoordinator: NSObject {
         case .began:
             guard let nav = navigationController,
                   let transition = poppableZoom(in: nav),
+                  !transition.suppressesInteractionForAccessibility,
                   transition.stateMachine.state == .idle else { return }
             let driver = transition.makeInteractionDriver(operation: .pop)
             driver.wantsInteractiveStart = true
@@ -139,7 +140,9 @@ extension ZoomEdgePopCoordinator: UIGestureRecognizerDelegate {
             // pop" intent. The in-progress gesture is unaffected — `shouldBegin` is not re-queried
             // once it has begun.
             guard nav.transitionCoordinator == nil else { return false }
-            return poppableZoom(in: nav)?.stateMachine.state == .idle
+            guard let zoom = poppableZoom(in: nav),
+                  !zoom.suppressesInteractionForAccessibility else { return false }
+            return zoom.stateMachine.state == .idle
         }
 
         // System interactivePopGestureRecognizer.
