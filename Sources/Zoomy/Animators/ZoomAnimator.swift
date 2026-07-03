@@ -11,6 +11,14 @@ import UIKit
 /// view's counter-scale. Both are always separate, even here in the non-interactive path, so
 /// M6's grab can kill and rebuild the geometry animator alone (TECH_SPEC §14-2).
 ///
+/// ### Interactive-capable helpers (M6, §7)
+/// `makeAnimators` (non-interactive) is expressed as `makeTransitionAnimator` + a corner morph +
+/// `makeGeometryAnimators`; the `ZoomInteractionDriver` reuses those same helpers to build a
+/// paused-at-0 transition animator up front and fresh geometry springs at settle time.
+/// `prepareInteractive` stages the disappearing views without building any animator, and
+/// `applyInteractiveFollow` scrubs the staged portal/live-view directly from a `FollowModel`
+/// output while a pan gesture is in flight.
+///
 /// ### Top-center anchoring — judgment call
 /// The brief specifies a "top-center anchor effect" achieved by scaling the live view and then
 /// correcting `frame.origin`. Mutating `frame` *while a transform is applied* is unsupported by
@@ -49,16 +57,21 @@ final class ZoomAnimator: ZoomTransitionAnimating {
     func makeAnimators(
         using context: ZoomAnimationContext
     ) -> (transition: UIViewPropertyAnimator, geometry: [UIViewPropertyAnimator]) {
-        let spring = context.configuration.spring
-        let transitionAnimator = makeSpringAnimator(spring)
-        let geometryAnimator = makeSpringAnimator(spring)
+        // The non-interactive path is exactly `makeTransitionAnimator` + the corner morph (which
+        // the interactive path drives directly, hence its being added here rather than inside the
+        // shared helper) + a single geometry spring to the phase's resting rect.
+        let transitionAnimator = makeTransitionAnimator(using: context)
+        addCornerMorph(to: transitionAnimator, using: context)
 
+        let targetRect: CGRect
         switch context.phase {
-        case .appearing: configureAppearingAnimators(context, transitionAnimator, geometryAnimator)
-        case .disappearing: configureDisappearingAnimators(context, transitionAnimator, geometryAnimator)
+        case .appearing: targetRect = context.finalFrame
+        case .disappearing: targetRect = context.geometry?.sourceRect ?? context.finalFrame
         }
-
-        return (transitionAnimator, [geometryAnimator])
+        let geometry = makeGeometryAnimators(
+            using: context, targetPortalRect: targetRect, initialVelocity: .zero
+        )
+        return (transitionAnimator, geometry)
     }
 
     func finish(using context: ZoomAnimationContext, completed: Bool) {
@@ -78,17 +91,106 @@ final class ZoomAnimator: ZoomTransitionAnimating {
             portal.removeFromSuperview()
 
         case (.appearing, false):
-            // Non-interactive present has no cancel path (M6); defensive teardown only.
+            // Interactive present grab thrown back (M6): remove the never-committed destination.
             zoomedView.removeFromSuperview()
             portal.removeFromSuperview()
 
         case (.disappearing, false):
-            // Cancelled dismiss (M6): restore the live view to its resting position.
+            // Cancelled dismiss (M6): restore the live view to its resting position — this is the
+            // cancel-recovery invariant (identity transform + finalFrame) the call-order tests assert.
             context.containerView.addSubview(zoomedView)
             zoomedView.transform = .identity
             zoomedView.frame = context.finalFrame
             portal.removeFromSuperview()
         }
+    }
+
+    // MARK: - Interactive hooks (M6, §7)
+
+    /// Interactive disappearing setup: portal creation, reparenting, source hide, dimming/presenter
+    /// staging — everything `prepareDisappearing` does — *without* building any animator (the driver
+    /// creates a paused transition animator itself and fresh geometry springs at settle time).
+    func prepareInteractive(using context: ZoomAnimationContext) {
+        guard context.phase == .disappearing else {
+            ZoomyAssert.fail("prepareInteractive is only valid for a disappearing (dismiss/pop) transition")
+            return
+        }
+        guard let source = context.resolvedSource, let geometry = context.geometry else {
+            ZoomyAssert.fail("prepareInteractive called without a resolved source")
+            return
+        }
+        prepareDisappearing(context, source: source, geometry: geometry)
+    }
+
+    /// Builds the scrub/reverse-safe transition animator (dimming, presenter push-back, placard,
+    /// status bar) with no geometry and no corner morph — the driver drives corner directly from
+    /// `cornerProgress` while following the finger. Returned in the `.inactive` state; the caller
+    /// pauses it to arm scrubbing.
+    func makeTransitionAnimator(using context: ZoomAnimationContext) -> UIViewPropertyAnimator {
+        let animator = makeSpringAnimator(context.configuration.spring)
+        switch context.phase {
+        case .appearing: configureAppearingTransition(context, animator)
+        case .disappearing: configureDisappearingTransition(context, animator)
+        }
+        return animator
+    }
+
+    /// Builds the geometry spring that flies the portal (and counter-scales the live view) from its
+    /// current staged state to `targetPortalRect`. Used by the non-interactive `makeAnimators` (to
+    /// the resting rect, zero velocity) and by the driver's settle (to the re-resolved source rect
+    /// or the final frame, seeded with the release velocity).
+    func makeGeometryAnimators(
+        using context: ZoomAnimationContext,
+        targetPortalRect: CGRect,
+        initialVelocity: CGVector
+    ) -> [UIViewPropertyAnimator] {
+        let spring = context.configuration.spring
+        let timing = SpringConverter.timingParameters(
+            response: spring.response,
+            dampingRatio: spring.dampingRatio,
+            initialVelocity: initialVelocity
+        )
+        let animator = UIViewPropertyAnimator(duration: spring.response, timingParameters: timing)
+
+        let portal = context.portal
+        let zoomedView = context.zoomedView
+        let finalSize = context.finalFrame.size
+        let scale = (finalSize.width != 0) ? (targetPortalRect.width / finalSize.width) : 1
+
+        animator.addAnimations {
+            portal.frame = targetPortalRect
+            zoomedView.transform = CGAffineTransform(scaleX: scale, y: scale)
+            zoomedView.center = self.scaledTopCenter(finalSize: finalSize, scale: scale)
+        }
+        return [animator]
+    }
+
+    /// Directly applies one finger-follow frame to the staged portal/live-view (§ interactive
+    /// `.changed`): the portal is sized `finalSize · scale` and centered under the finger, the live
+    /// view counter-scales top-centered to fill it, and the corner radius lerps final→source by
+    /// `cornerProgress`. No animation — a straight model-layer write per gesture sample.
+    func applyInteractiveFollow(
+        using context: ZoomAnimationContext,
+        scale: CGFloat,
+        center: CGPoint,
+        cornerProgress: CGFloat
+    ) {
+        guard let geometry = context.geometry else { return }
+        let portal = context.portal
+        let zoomedView = context.zoomedView
+        let finalSize = context.finalFrame.size
+
+        let portalSize = CGSize(width: finalSize.width * scale, height: finalSize.height * scale)
+        portal.frame = CGRect(
+            origin: CGPoint(x: center.x - portalSize.width / 2, y: center.y - portalSize.height / 2),
+            size: portalSize
+        )
+        zoomedView.transform = CGAffineTransform(scaleX: scale, y: scale)
+        zoomedView.center = scaledTopCenter(finalSize: finalSize, scale: scale)
+
+        let corner = geometry.finalCornerRadius
+            + (geometry.sourceCornerRadius - geometry.finalCornerRadius) * cornerProgress
+        portal.portalCornerRadius = corner
     }
 
     // MARK: - Appearing (present)
@@ -149,28 +251,16 @@ final class ZoomAnimator: ZoomTransitionAnimating {
         container.layoutIfNeeded()
     }
 
-    private func configureAppearingAnimators(
+    private func configureAppearingTransition(
         _ context: ZoomAnimationContext,
-        _ transitionAnimator: UIViewPropertyAnimator,
-        _ geometryAnimator: UIViewPropertyAnimator
+        _ transitionAnimator: UIViewPropertyAnimator
     ) {
-        guard let geometry = context.geometry else { return }
         let portal = context.portal
-        let zoomedView = context.zoomedView
-        let finalSize = context.finalFrame.size
 
-        // Geometry: portal grows to the final frame; live view un-scales to identity, centered.
-        geometryAnimator.addAnimations {
-            portal.frame = context.finalFrame
-            zoomedView.transform = .identity
-            zoomedView.center = CGPoint(x: finalSize.width / 2, y: finalSize.height / 2)
-        }
-
-        // Transition: dimming in, presenter pushed back, corner morph to final, status bar.
+        // Dimming in, presenter pushed back, status bar. (Corner morph is added separately.)
         transitionAnimator.addAnimations {
             context.dimmingView?.alpha = 1
             context.presenterView?.transform = Self.presenterPushBack
-            portal.portalCornerRadius = geometry.finalCornerRadius
             context.zoomedViewController.setNeedsStatusBarAppearanceUpdate()
         }
 
@@ -236,29 +326,16 @@ final class ZoomAnimator: ZoomTransitionAnimating {
         container.layoutIfNeeded()
     }
 
-    private func configureDisappearingAnimators(
+    private func configureDisappearingTransition(
         _ context: ZoomAnimationContext,
-        _ transitionAnimator: UIViewPropertyAnimator,
-        _ geometryAnimator: UIViewPropertyAnimator
+        _ transitionAnimator: UIViewPropertyAnimator
     ) {
-        guard let source = context.resolvedSource, let geometry = context.geometry else { return }
         let portal = context.portal
-        let zoomedView = context.zoomedView
-        let finalSize = context.finalFrame.size
-        let scale = geometry.contentScale(portalWidth: source.rectInContainer.width)
 
-        // Geometry: portal shrinks to the source rect; live view scales down, top-center anchored.
-        geometryAnimator.addAnimations {
-            portal.frame = source.rectInContainer
-            zoomedView.transform = CGAffineTransform(scaleX: scale, y: scale)
-            zoomedView.center = self.scaledTopCenter(finalSize: finalSize, scale: scale)
-        }
-
-        // Transition: dimming out, presenter back to identity, corner morph to the source radius.
+        // Dimming out, presenter back to identity, status bar. (Corner morph is added separately.)
         transitionAnimator.addAnimations {
             context.dimmingView?.alpha = 0
             context.presenterView?.transform = .identity
-            portal.portalCornerRadius = geometry.sourceCornerRadius
             context.zoomedViewController.setNeedsStatusBarAppearanceUpdate()
         }
 
@@ -278,6 +355,18 @@ final class ZoomAnimator: ZoomTransitionAnimating {
     }
 
     // MARK: - Helpers
+
+    /// Adds the corner-radius morph to the transition animator: to the container radius on the way
+    /// in, back to the source radius on the way out. Split out of `makeTransitionAnimator` because
+    /// the interactive path drives the corner directly from `cornerProgress` instead.
+    private func addCornerMorph(to animator: UIViewPropertyAnimator, using context: ZoomAnimationContext) {
+        guard let geometry = context.geometry else { return }
+        let portal = context.portal
+        let target = (context.phase == .appearing) ? geometry.finalCornerRadius : geometry.sourceCornerRadius
+        animator.addAnimations {
+            portal.portalCornerRadius = target
+        }
+    }
 
     /// Center that pins the top edge to y=0 and horizontally centers a `finalSize`-bounds view
     /// scaled by `scale` (derivation in the type doc / report).
