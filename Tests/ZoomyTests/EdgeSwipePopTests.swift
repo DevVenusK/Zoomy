@@ -49,6 +49,22 @@ final class EdgeSwipePopTests: XCTestCase {
         }
     }
 
+    /// Records `endEditing` calls, standing in for a screen with an active keyboard so the
+    /// Minor-cleanup resign call (edge-pan `.began` parity with the finger-follow pan dismiss) can be
+    /// asserted without needing a real first responder/window.
+    private final class SpyEditingView: UIView {
+        private(set) var endEditingCallCount = 0
+        override func endEditing(_ force: Bool) -> Bool {
+            endEditingCallCount += 1
+            return super.endEditing(force)
+        }
+    }
+
+    private final class SpyEditingViewController: UIViewController {
+        let spyView = SpyEditingView()
+        override func loadView() { view = spyView }
+    }
+
     // MARK: - Fixtures
 
     private func makeZoomTransition(resolvesSource: Bool = true) -> (ZoomTransition, UIView) {
@@ -268,6 +284,61 @@ final class EdgeSwipePopTests: XCTestCase {
         XCTAssertTrue(vended === interactionDriver,
                       "interactionControllerFor must vend our interaction driver for a gesture-active pop")
         XCTAssertTrue(interactionDriver.wantsInteractiveStart)
+    }
+
+    // MARK: - Keyboard resign on edge-pan began (Minor cleanup: parity with the pan dismiss's `.began`)
+
+    func test_edgePanBegan_resignsFirstResponders_whenConfigured() throws {
+        let root = UIViewController()
+        let detail = SpyEditingViewController()
+        let (transition, source) = makeZoomTransition()
+        root.view.addSubview(source)
+        detail.zoomTransition = transition
+        transition.pushPredecessor = root
+
+        let spyNav = SpyNavigationController(rootViewController: root)
+        spyNav.setViewControllers([root, detail], animated: false)
+
+        let coordinator = ZoomEdgePopCoordinator(navigationController: spyNav)
+
+        let gesture = MockPanGestureRecognizer()
+        gesture.mockView = detail.view
+        gesture.mockState = .began
+        gesture.mockTranslation = CGPoint(x: 24, y: 0)
+        coordinator.handleEdgePan(gesture)
+
+        XCTAssertGreaterThanOrEqual(
+            detail.spyView.endEditingCallCount, 1,
+            "an edge-initiated pop's .began must resign the zoomed VC's first responder (keyboard parity with the pan dismiss)"
+        )
+    }
+
+    func test_edgePanBegan_doesNotResignFirstResponders_whenDisabled() throws {
+        let root = UIViewController()
+        let detail = SpyEditingViewController()
+        var configuration = ZoomTransition.Configuration.default
+        configuration.resignsFirstResponders = false
+        let source = UIView(frame: CGRect(x: 40, y: 200, width: 120, height: 120))
+        let transition = ZoomTransition(configuration: configuration) { _ in source }
+        root.view.addSubview(source)
+        detail.zoomTransition = transition
+        transition.pushPredecessor = root
+
+        let spyNav = SpyNavigationController(rootViewController: root)
+        spyNav.setViewControllers([root, detail], animated: false)
+
+        let coordinator = ZoomEdgePopCoordinator(navigationController: spyNav)
+
+        let gesture = MockPanGestureRecognizer()
+        gesture.mockView = detail.view
+        gesture.mockState = .began
+        gesture.mockTranslation = CGPoint(x: 24, y: 0)
+        coordinator.handleEdgePan(gesture)
+
+        XCTAssertEqual(
+            detail.spyView.endEditingCallCount, 0,
+            "resignsFirstResponders == false must not resign the zoomed VC's editing views on edge-pan began"
+        )
     }
 
     // MARK: - Stock preservation on a non-zoom nav (§2)

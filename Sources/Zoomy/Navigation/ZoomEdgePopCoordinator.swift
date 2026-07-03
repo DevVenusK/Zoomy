@@ -80,9 +80,11 @@ final class ZoomEdgePopCoordinator: NSObject {
 
     /// Routes the edge swipe into M6's `ZoomInteractionDriver` (declared over `UIPanGestureRecognizer`
     /// so tests can drive it with a mock — `UIScreenEdgePanGestureRecognizer` is a subclass):
-    /// - `.began` on a poppable zoom screen: mark the driver gesture-initiated, register the gesture
-    ///   so `isGestureActive` sees it, then hand `.began` to `handlePan` — which triggers
-    ///   `popViewController`, so the proxy vends the pop driver and pairs the interactive driver.
+    /// - `.began` on a poppable zoom screen: resign the zoomed VC's keyboard (parity with the
+    ///   finger-follow pan dismiss, gated on `resignsFirstResponders`), mark the driver
+    ///   gesture-initiated, register the gesture so `isGestureActive` sees it, then hand `.began` to
+    ///   `handlePan` — which triggers `popViewController`, so the proxy vends the pop driver and pairs
+    ///   the interactive driver.
     /// - `.changed` / end states: forwarded to the driver captured at `.began` (the top VC has since
     ///   become the predecessor, so it can't be re-resolved from the stack).
     @objc func handleEdgePan(_ gesture: UIPanGestureRecognizer) {
@@ -92,6 +94,9 @@ final class ZoomEdgePopCoordinator: NSObject {
                   let transition = poppableZoom(in: nav),
                   !transition.suppressesInteractionForAccessibility,
                   transition.stateMachine.state == .idle else { return }
+            if transition.configuration.resignsFirstResponders {
+                transition.attachedViewController?.view.endEditing(true)
+            }
             let driver = transition.makeInteractionDriver(operation: .pop)
             driver.wantsInteractiveStart = true
             driver.registerExternalDrivingGesture(gesture)
