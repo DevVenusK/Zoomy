@@ -283,7 +283,15 @@ final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
             self?.forceFinish(.sceneBackground)
         }
 
-        let finalFrame = context.finalFrame(for: zoomedViewController)
+        // The zoom's "resting" frame — the destination's final frame on the way in, the departing
+        // view's current (full) frame on the way out. UIKit returns `.zero` from `finalFrame(for:)`
+        // for the *departing* controller of a pop/dismiss ("won't be visible at the end"), which
+        // would make the content-scale reference zero (portal shrinks to the cell but the live view
+        // stays full-size, pinned top-left — the "weird" pop). Fall back to where the view rests now.
+        var finalFrame = context.finalFrame(for: zoomedViewController)
+        if finalFrame.isEmpty {
+            finalFrame = zoomedView.frame.isEmpty ? container.bounds : zoomedView.frame
+        }
 
         let strategy: ZoomTransitionAnimating
         var resolvedSource: ResolvedSource?

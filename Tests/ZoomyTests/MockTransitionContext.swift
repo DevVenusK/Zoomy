@@ -28,6 +28,11 @@ final class MockTransitionContext: NSObject, UIViewControllerContextTransitionin
     /// Toggleable so a test can present an interactive context (§8). Defaults to `false`.
     var isInteractiveOverride = false
 
+    /// Per-view-controller `finalFrame` overrides, so a test can reproduce UIKit returning `.zero`
+    /// for the *departing* controller of a pop/dismiss ("won't be visible at the end"). Falls back
+    /// to `containerView.bounds` when absent.
+    var finalFrameOverrides: [ObjectIdentifier: CGRect] = [:]
+
     init(
         containerView: UIView,
         fromViewController: UIViewController,
@@ -66,7 +71,9 @@ final class MockTransitionContext: NSObject, UIViewControllerContextTransitionin
     }
 
     func initialFrame(for vc: UIViewController) -> CGRect { containerView.bounds }
-    func finalFrame(for vc: UIViewController) -> CGRect { containerView.bounds }
+    func finalFrame(for vc: UIViewController) -> CGRect {
+        finalFrameOverrides[ObjectIdentifier(vc)] ?? containerView.bounds
+    }
 
     func completeTransition(_ didComplete: Bool) {
         completeTransitionCallCount += 1
