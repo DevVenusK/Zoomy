@@ -26,6 +26,11 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             }
         }
 
+        // Screenshot / UI-test affordance: jump straight to the Settings tab. No-op otherwise.
+        if ProcessInfo.processInfo.arguments.contains("-zoomySettings") {
+            tabBarController.selectedIndex = 3
+        }
+
         // Screenshot / UI-test affordance: stay on the Push tab and auto-push the first item so the
         // push zoom can be captured without a synthesized tap. No-op otherwise.
         if ProcessInfo.processInfo.arguments.contains("-zoomyDemoPush") {
@@ -75,8 +80,17 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             tag: 2
         )
 
+        // Settings tab: live-adjust the zoom animation speed/bounciness (DemoSettings).
+        let settings = SettingsViewController()
+        let settingsTab = UINavigationController(rootViewController: settings)
+        settingsTab.tabBarItem = UITabBarItem(
+            title: "Settings",
+            image: UIImage(systemName: "slider.horizontal.3"),
+            tag: 3
+        )
+
         let tabBarController = UITabBarController()
-        tabBarController.viewControllers = [pushTab, modalTab, tortureTab]
+        tabBarController.viewControllers = [pushTab, modalTab, tortureTab, settingsTab]
         return (tabBarController, pushGrid, torture)
     }
 }

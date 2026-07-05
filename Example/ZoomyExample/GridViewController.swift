@@ -158,7 +158,7 @@ extension GridViewController {
         let detail = PhotoDetailViewController(item: item)
 
         let capturedID = item.id
-        detail.zoomTransition = ZoomTransition { [weak self] _ in
+        detail.zoomTransition = ZoomTransition(configuration: DemoSettings.shared.makeConfiguration()) { [weak self] _ in
             guard let self,
                   let index = self.items.firstIndex(where: { $0.id == capturedID }) else {
                 return nil
@@ -181,7 +181,7 @@ extension GridViewController {
         let detail = PhotoDetailViewController(item: item, presentationContext: .push)
 
         let capturedID = item.id
-        detail.zoomTransition = ZoomTransition { [weak self] _ in
+        detail.zoomTransition = ZoomTransition(configuration: DemoSettings.shared.makeConfiguration()) { [weak self] _ in
             guard let self,
                   let index = self.items.firstIndex(where: { $0.id == capturedID }) else {
                 return nil
