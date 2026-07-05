@@ -2,8 +2,8 @@ import UIKit
 
 /// Full-screen detail shown with a Zoomy zoom. Reused by both tabs:
 /// - tab 2 (`.modal`) presents it and shows a top-right close button;
-/// - tab 1 (`.push`) pushes it onto a navigation controller and relies on the back gesture/button,
-///   hiding the navigation bar so the detail reads full-bleed.
+/// - tab 1 (`.push`) pushes it onto a navigation controller, hiding the navigation bar so the detail
+///   reads full-bleed, and shows a floating top-left back button (plus the back/edge gestures).
 ///
 /// `preferredStatusBarStyle = .lightContent` together with the modal presentation controller's
 /// `modalPresentationCapturesStatusBarAppearance = true` demonstrates that the shown VC drives the
@@ -49,23 +49,57 @@ final class PhotoDetailViewController: UIViewController {
             label.centerYAnchor.constraint(equalTo: view.centerYAnchor)
         ])
 
-        // The close button only makes sense for a modal; a pushed detail uses the back gesture/button.
-        if presentationContext == .modal {
-            let closeButton = UIButton(type: .system)
-            let closeImage = UIImage(
-                systemName: "xmark.circle.fill",
-                withConfiguration: UIImage.SymbolConfiguration(pointSize: 30)
+        switch presentationContext {
+        case .modal:
+            // Top-right close button dismisses the modal.
+            addCornerButton(
+                systemImage: "xmark.circle.fill",
+                accessibilityLabel: "Close",
+                edge: .trailing,
+                action: #selector(closeTapped)
             )
-            closeButton.setImage(closeImage, for: .normal)
-            closeButton.tintColor = .black
-            closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
-            closeButton.translatesAutoresizingMaskIntoConstraints = false
-            view.addSubview(closeButton)
-            NSLayoutConstraint.activate([
-                closeButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
-                closeButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16)
-            ])
+        case .push:
+            // Top-left back button pops the navigation stack (the nav bar is hidden for full-bleed).
+            addCornerButton(
+                systemImage: "chevron.backward.circle.fill",
+                accessibilityLabel: "Back",
+                edge: .leading,
+                action: #selector(backTapped)
+            )
         }
+    }
+
+    private enum CornerEdge { case leading, trailing }
+
+    private func addCornerButton(
+        systemImage: String,
+        accessibilityLabel: String,
+        edge: CornerEdge,
+        action: Selector
+    ) {
+        let button = UIButton(type: .system)
+        let image = UIImage(
+            systemName: systemImage,
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 30)
+        )
+        button.setImage(image, for: .normal)
+        button.tintColor = .black
+        button.accessibilityLabel = accessibilityLabel
+        button.addTarget(self, action: action, for: .touchUpInside)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(button)
+
+        let horizontal: NSLayoutConstraint
+        switch edge {
+        case .leading:
+            horizontal = button.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16)
+        case .trailing:
+            horizontal = button.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16)
+        }
+        NSLayoutConstraint.activate([
+            button.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            horizontal
+        ])
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -87,5 +121,9 @@ final class PhotoDetailViewController: UIViewController {
 
     @objc private func closeTapped() {
         dismiss(animated: true)
+    }
+
+    @objc private func backTapped() {
+        navigationController?.popViewController(animated: true)
     }
 }
