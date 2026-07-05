@@ -296,8 +296,15 @@ final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
             strategy = CrossDissolveAnimator()
         } else {
             // §5: on a dismiss/pop, force the presenter's layout before resolving the source so a
-            // rotation-while-presented can't leave the source view at a stale frame.
+            // rotation-while-presented can't leave the source view at a stale frame. On a nav *pop*
+            // the revealed destination isn't in the window yet, so its source view would resolve as
+            // `.detached` and the pop would fall back to a cross-dissolve instead of zooming home —
+            // seat it in the container first so the source has a window. (Modal dismiss doesn't need
+            // this: the presenter's view stays in the window via `shouldRemovePresentersView`.)
             if phase == .disappearing {
+                if operation == .pop {
+                    seatRevealedPopDestination(container: container, context: context)
+                }
                 (context.view(forKey: .to) ?? presenterVC?.view)?.layoutIfNeeded()
             }
 
@@ -586,14 +593,10 @@ final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
         container: UIView,
         context: UIViewControllerContextTransitioning
     ) -> UIView? {
-        // Pop: place the revealed view under the departing one.
-        if phase == .disappearing,
-           let toVC = context.viewController(forKey: .to),
-           let toView = context.view(forKey: .to),
-           toView.superview !== container {
-            toView.frame = context.finalFrame(for: toVC)
-            container.insertSubview(toView, at: 0)
-        }
+        // Pop: place the revealed view under the departing one. Usually already seated before source
+        // resolution (see `seatRevealedPopDestination`); this covers the forced-fallback pop, which
+        // skips resolution. Idempotent via the helper's `superview` guard.
+        seatRevealedPopDestination(container: container, context: context)
 
         guard let color = transition.configuration.dimmingColor else { return nil }
 
@@ -611,6 +614,24 @@ final class TransitionDriver: NSObject, UIViewControllerAnimatedTransitioning {
             container.insertSubview(dimming, at: 0)
         }
         return dimming
+    }
+
+    /// Seats the revealed destination view at the bottom of the container on a pop, giving the source
+    /// view it hosts a window *before* source resolution. Without this the source resolves as
+    /// `.detached` and the pop falls back to a cross-dissolve instead of zooming to the source cell
+    /// (nav pop only — modal dismiss keeps its presenter in the window already). Idempotent: guarded
+    /// on `superview !== container`, so calling it both pre-resolution and from `installNavigationBackdrop`
+    /// (the forced-fallback path) seats the view exactly once. No-op for an appearing phase.
+    private func seatRevealedPopDestination(
+        container: UIView,
+        context: UIViewControllerContextTransitioning
+    ) {
+        guard phase == .disappearing,
+              let toVC = context.viewController(forKey: .to),
+              let toView = context.view(forKey: .to),
+              toView.superview !== container else { return }
+        toView.frame = context.finalFrame(for: toVC)
+        container.insertSubview(toView, at: 0)
     }
 
     private func view(
