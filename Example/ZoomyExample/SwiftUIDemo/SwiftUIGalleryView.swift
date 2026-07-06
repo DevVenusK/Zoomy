@@ -20,10 +20,11 @@ struct SwiftUIGalleryView: View {
     var body: some View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 8) {
-                ForEach(items) { item in
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     Color(hue: item.hue, saturation: 0.35, brightness: 0.95)
                         .aspectRatio(1, contentMode: .fill)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .overlay(Text("\(index + 1)").font(.largeTitle.weight(.bold)).foregroundColor(.white.opacity(0.9)))
                         .zoomSource(id: item.id, cornerRadius: 12)
                         .onTapGesture { selected = item }
                 }
