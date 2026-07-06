@@ -1,5 +1,6 @@
 import UIKit
 import Zoomy
+import SwiftUI
 
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
@@ -89,8 +90,18 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             tag: 3
         )
 
+        // SwiftUI tab: the same grid + zoom detail built entirely in SwiftUI via the zoomCover bridge.
+        let swiftUITab = UINavigationController(
+            rootViewController: UIHostingController(rootView: SwiftUIGalleryView())
+        )
+        swiftUITab.tabBarItem = UITabBarItem(
+            title: "SwiftUI",
+            image: UIImage(systemName: "swift"),
+            tag: 4
+        )
+
         let tabBarController = UITabBarController()
-        tabBarController.viewControllers = [pushTab, modalTab, tortureTab, settingsTab]
+        tabBarController.viewControllers = [pushTab, modalTab, tortureTab, settingsTab, swiftUITab]
         return (tabBarController, pushGrid, torture)
     }
 }
