@@ -20,6 +20,7 @@ struct SwiftUIDetailView: View {
                     .background(.ultraThinMaterial, in: Circle())
             }
             .padding()
+            .accessibilityLabel("Close")
         }
     }
 }
