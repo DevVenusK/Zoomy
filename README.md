@@ -213,6 +213,37 @@ Real sharp edges, found the hard way. Read these before shipping a zoom transiti
    combined with a sheet or popover style. tvOS and Mac Catalyst are untested and outside CI;
    `Package.swift` only declares `.iOS(.v15)` as a supported platform.
 
+## SwiftUI
+
+On iOS 15+ you can present a full-screen zoom cover from SwiftUI with two modifiers — no UIKit code:
+
+```swift
+struct Photo: Identifiable { let id: UUID; let color: Color }
+
+struct Gallery: View {
+    let photos: [Photo]
+    @State private var selected: Photo?
+
+    var body: some View {
+        LazyVGrid(columns: columns) {
+            ForEach(photos) { photo in
+                photo.color
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .zoomSource(id: photo.id, cornerRadius: 12)   // mark the source; id must match the item's id
+                    .onTapGesture { selected = photo }
+            }
+        }
+        .zoomCover(item: $selected) { photo in                     // present full-screen with the zoom
+            PhotoDetail(photo: photo)
+        }
+    }
+}
+```
+
+- `zoomSource(id:cornerRadius:)` marks the view a zoom flies out of/into; `id` must equal the presented item's `Identifiable` id, and `cornerRadius` feeds `.automatic` corner morphing.
+- `zoomCover(item:configuration:content:)` presents `content(item)` full-screen. Set `item` back to `nil` to dismiss; the interactive pan-to-dismiss and VoiceOver escape sync `item` back to `nil` automatically. Pass a `configuration:` to tune the spring/dimming/etc. exactly as in UIKit.
+- Scope: full-screen **cover** only (SwiftUI `NavigationStack` push zoom is not supported). Give the destination an opaque background.
+
 ## Example app
 
 ```sh
