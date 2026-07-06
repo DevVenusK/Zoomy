@@ -24,6 +24,7 @@ https://github.com/user-attachments/assets/77962b17-83dc-4c43-9831-23eb2272ee38
 - [Configuration](#configuration)
 - [Behavior](#behavior)
 - [Caveats](#caveats)
+- [SwiftUI](#swiftui)
 - [Example app](#example-app)
 - [License](#license)
 
