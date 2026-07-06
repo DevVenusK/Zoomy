@@ -244,6 +244,8 @@ struct Gallery: View {
 - `zoomSource(id:cornerRadius:)` marks the view a zoom flies out of/into; `id` must equal the presented item's `Identifiable` id, and `cornerRadius` feeds `.automatic` corner morphing.
 - `zoomCover(item:configuration:content:)` presents `content(item)` full-screen. Set `item` back to `nil` to dismiss; the interactive pan-to-dismiss and VoiceOver escape sync `item` back to `nil` automatically. Pass a `configuration:` to tune the spring/dimming/etc. exactly as in UIKit.
 - Scope: full-screen **cover** only (SwiftUI `NavigationStack` push zoom is not supported). Give the destination an opaque background.
+- The destination is built once per presentation: if the bound item's *data* changes while the same item id stays presented, the hosted view is not rebuilt in this version — set `item` to a new identity to re-present.
+- `zoomSource` ids are process-wide: ids must be unique/stable across galleries that can be on screen at the same time (last registration wins).
 
 ## Example app
 
