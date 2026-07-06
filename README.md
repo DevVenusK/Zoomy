@@ -36,14 +36,14 @@ Add Zoomy as a dependency in `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/<your-org>/Zoomy.git", branch: "main")
+    .package(url: "https://github.com/DevVenusK/Zoomy.git", from: "2.0.0")
 ],
 targets: [
     .target(name: "YourApp", dependencies: ["Zoomy"])
 ]
 ```
 
-(No tagged release exists yet — pin to a version once one is cut.)
+(Latest release: **2.0.0**, which adds the SwiftUI `zoomSource` / `zoomCover` bridge.)
 
 Or, in Xcode: **File → Add Package Dependencies…**, paste the repository URL, and add the
 `Zoomy` library to your app target.
