@@ -1,4 +1,5 @@
 import UIKit
+import ZoomyCore
 
 /// The real zoom choreography (`docs/TECH_SPEC.md` §6/§7): flies a `PortalView` between the
 /// resolved source rect and the destination's final frame while the live view counter-scales

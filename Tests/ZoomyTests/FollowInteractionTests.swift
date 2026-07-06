@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import ZoomyCore
 @testable import Zoomy
 
 /// Driver-logic coverage for `ZoomInteractionDriver` (brief §8, "FollowInteractionTests"): that a

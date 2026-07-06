@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import ZoomyCore
 @testable import Zoomy
 
 /// The spec gate for M5's edge-swipe pop wiring (brief §1–§3): the coordinator is installed on a

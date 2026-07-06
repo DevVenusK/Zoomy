@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import ZoomyCore
 @testable import Zoomy
 
 /// The interactive spec gate (brief §8): drives `ZoomInteractionDriver` through a

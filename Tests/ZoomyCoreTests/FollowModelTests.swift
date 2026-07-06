@@ -1,6 +1,6 @@
 import XCTest
 import CoreGraphics
-@testable import Zoomy
+import ZoomyCore
 
 final class FollowModelTests: XCTestCase {
 

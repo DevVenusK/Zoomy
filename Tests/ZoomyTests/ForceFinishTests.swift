@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import ZoomyCore
 @testable import Zoomy
 
 /// The spec gate for M7 §1 / §6: drives `TransitionDriver.forceFinish` (rotation / size change /

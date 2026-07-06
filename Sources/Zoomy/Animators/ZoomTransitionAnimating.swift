@@ -1,4 +1,5 @@
 import UIKit
+import ZoomyCore
 
 /// Strategy interface `TransitionDriver` runs a transition through. `ZoomAnimator` is the real
 /// zoom choreography; `CrossDissolveAnimator` is the fallback (unresolvable source, and later

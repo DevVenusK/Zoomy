@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import ZoomyCore
 @testable import Zoomy
 
 /// The spec gate for M3b (brief §9): drives `TransitionDriver` directly through a

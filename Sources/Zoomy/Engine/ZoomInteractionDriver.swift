@@ -1,4 +1,5 @@
 import UIKit
+import ZoomyCore
 
 /// The interactive dismiss/pop engine (TECH_SPEC §5.7 / §7.6 / §7.7): a custom
 /// `UIViewControllerInteractiveTransitioning` that follows the finger to shrink the destination

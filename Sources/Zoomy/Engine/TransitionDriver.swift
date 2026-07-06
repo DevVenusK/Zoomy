@@ -1,4 +1,5 @@
 import UIKit
+import ZoomyCore
 import os.log
 
 /// One-shot state for a single in-flight transition. Held by `ZoomTransition.activeTransition`

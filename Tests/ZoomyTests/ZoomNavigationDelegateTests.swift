@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import ZoomyCore
 @testable import Zoomy
 
 /// Vend-rule coverage for `ZoomNavigationDelegate.navigationController(_:animationControllerFor:…)`

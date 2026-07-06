@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import ZoomyCore
 @testable import Zoomy
 
 /// Regression gate for the nav-pop "returns to source" fix: on a real navigation pop the revealed

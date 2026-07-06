@@ -2,16 +2,30 @@ import CoreGraphics
 
 /// Pure geometry for a zoom transition portal — no UIKit dependency.
 /// All rects are expressed in the shared container's coordinate space.
-struct ZoomGeometry: Equatable {
-    let sourceRect: CGRect
-    let sourceVisibleRect: CGRect
-    let finalRect: CGRect
-    let sourceCornerRadius: CGFloat
-    let finalCornerRadius: CGFloat
+public struct ZoomGeometry: Equatable {
+    public let sourceRect: CGRect
+    public let sourceVisibleRect: CGRect
+    public let finalRect: CGRect
+    public let sourceCornerRadius: CGFloat
+    public let finalCornerRadius: CGFloat
+
+    public init(
+        sourceRect: CGRect,
+        sourceVisibleRect: CGRect,
+        finalRect: CGRect,
+        sourceCornerRadius: CGFloat,
+        finalCornerRadius: CGFloat
+    ) {
+        self.sourceRect = sourceRect
+        self.sourceVisibleRect = sourceVisibleRect
+        self.finalRect = finalRect
+        self.sourceCornerRadius = sourceCornerRadius
+        self.finalCornerRadius = finalCornerRadius
+    }
 
     /// Componentwise lerp from `sourceRect` to `finalRect`. `progress` is not clamped so
     /// spring overshoot can extrapolate past the endpoints; callers reverse (1 - p) for zoom-out.
-    func portalRect(at progress: CGFloat) -> CGRect {
+    public func portalRect(at progress: CGFloat) -> CGRect {
         CGRect(
             x: Self.lerp(sourceRect.origin.x, finalRect.origin.x, progress),
             y: Self.lerp(sourceRect.origin.y, finalRect.origin.y, progress),
@@ -23,7 +37,7 @@ struct ZoomGeometry: Equatable {
     /// Lerp from `sourceCornerRadius` to `finalCornerRadius`, then clamp to
     /// `[0, min(portalRect(at: progress) shortest side) / 2]` so the radius never exceeds
     /// what the (possibly tiny, mid-transition) portal rect can actually render.
-    func cornerRadius(at progress: CGFloat) -> CGFloat {
+    public func cornerRadius(at progress: CGFloat) -> CGFloat {
         let raw = Self.lerp(sourceCornerRadius, finalCornerRadius, progress)
         let rect = portalRect(at: progress)
         let maxRadius = min(rect.width, rect.height) / 2
@@ -31,14 +45,14 @@ struct ZoomGeometry: Equatable {
     }
 
     /// = portalWidth / finalRect.width, guarded against a zero-width final rect.
-    func contentScale(portalWidth: CGFloat) -> CGFloat {
+    public func contentScale(portalWidth: CGFloat) -> CGFloat {
         guard finalRect.width != 0 else { return 1 }
         return portalWidth / finalRect.width
     }
 
     /// Diminishing-returns rubber-band resistance, matching the classic
     /// `sign(x) * (1 - 1/(|x|*c/dimension + 1)) * dimension` formula (e.g. UIScrollView bounce).
-    static func rubberBand(_ x: CGFloat, dimension: CGFloat, c: CGFloat = 0.55) -> CGFloat {
+    public static func rubberBand(_ x: CGFloat, dimension: CGFloat, c: CGFloat = 0.55) -> CGFloat {
         guard x != 0 else { return 0 }
         let sign: CGFloat = x < 0 ? -1 : 1
         let magnitude = abs(x)
@@ -52,35 +66,40 @@ struct ZoomGeometry: Equatable {
 
 /// Pure model translating a raw pan-gesture translation/velocity into follow geometry for an
 /// interactive zoom dismissal. No UIKit dependency.
-struct FollowModel {
-    let containerSize: CGSize
-    let initialCenter: CGPoint
+public struct FollowModel {
+    public let containerSize: CGSize
+    public let initialCenter: CGPoint
 
-    static let kX: CGFloat = 0.5
-    static let spanRatio: CGFloat = 0.55
-    static let scaleRange: CGFloat = 0.45
-    static let scaleFloor: CGFloat = 0.55
-    static let rampEnd: CGFloat = 0.2
-    static let flickVelocity: CGFloat = 500
-    static let decelerationRate: CGFloat = 0.998
-    static let minDirectionDistance: CGFloat = 10
+    public static let kX: CGFloat = 0.5
+    public static let spanRatio: CGFloat = 0.55
+    public static let scaleRange: CGFloat = 0.45
+    public static let scaleFloor: CGFloat = 0.55
+    public static let rampEnd: CGFloat = 0.2
+    public static let flickVelocity: CGFloat = 500
+    public static let decelerationRate: CGFloat = 0.998
+    public static let minDirectionDistance: CGFloat = 10
 
-    var span: CGFloat { Self.spanRatio * containerSize.height }
+    public init(containerSize: CGSize, initialCenter: CGPoint) {
+        self.containerSize = containerSize
+        self.initialCenter = initialCenter
+    }
+
+    public var span: CGFloat { Self.spanRatio * containerSize.height }
 
     /// = clamp((max(t.y, 0) + kX*|t.x|) / span, 0, 1)
-    func progress(for translation: CGPoint) -> CGFloat {
+    public func progress(for translation: CGPoint) -> CGFloat {
         let raw = (max(translation.y, 0) + Self.kX * abs(translation.x)) / span
         return min(max(raw, 0), 1)
     }
 
     /// = max(scaleFloor, 1 - scaleRange*(1-(1-p)^2))
-    func scale(forProgress p: CGFloat) -> CGFloat {
+    public func scale(forProgress p: CGFloat) -> CGFloat {
         let remaining = 1 - p
         let raw = 1 - Self.scaleRange * (1 - remaining * remaining)
         return max(Self.scaleFloor, raw)
     }
 
-    func center(for translation: CGPoint) -> CGPoint {
+    public func center(for translation: CGPoint) -> CGPoint {
         let y: CGFloat
         if translation.y >= 0 {
             y = initialCenter.y + translation.y
@@ -91,7 +110,7 @@ struct FollowModel {
     }
 
     /// = min(1, p / rampEnd)
-    func cornerProgress(forProgress p: CGFloat) -> CGFloat {
+    public func cornerProgress(forProgress p: CGFloat) -> CGFloat {
         min(1, p / Self.rampEnd)
     }
 
@@ -99,7 +118,7 @@ struct FollowModel {
     /// direction (falling back to straight-down when the drag is too short to have a reliable
     /// direction), then either decides immediately on a strong flick or extrapolates the
     /// deceleration-scroll-style projected distance to see whether it would cross the midpoint.
-    func shouldComplete(progress p: CGFloat, velocity v: CGPoint, translation t: CGPoint) -> Bool {
+    public func shouldComplete(progress p: CGFloat, velocity v: CGPoint, translation t: CGPoint) -> Bool {
         let magnitude = (t.x * t.x + t.y * t.y).squareRoot()
         let direction: CGPoint
         if magnitude < Self.minDirectionDistance {
@@ -119,9 +138,9 @@ struct FollowModel {
 }
 
 /// §7.7 freeze-and-rebuild 후 진행도→새 애니메이터 fraction 재매핑.
-enum AnimatorFractionRemap {
+public enum AnimatorFractionRemap {
     /// = clamp((p - base) / (1 - base), 0, 0.995); guarded to 0.995 when base >= 1.
-    static func remap(progress p: CGFloat, base: CGFloat) -> CGFloat {
+    public static func remap(progress p: CGFloat, base: CGFloat) -> CGFloat {
         guard base < 1 else { return 0.995 }
         let raw = (p - base) / (1 - base)
         return min(max(raw, 0), 0.995)
