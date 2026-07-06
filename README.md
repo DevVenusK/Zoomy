@@ -15,6 +15,8 @@ dismiss/pop built in.
 - **Zero dependencies**
 - Small public surface (`ZoomTransition` + two extension entry points), everything else internal
 
+https://github.com/user-attachments/assets/77962b17-83dc-4c43-9831-23eb2272ee38
+
 ## Contents
 
 - [Installation](#installation)
