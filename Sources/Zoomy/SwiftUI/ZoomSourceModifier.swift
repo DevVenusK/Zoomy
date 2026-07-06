@@ -35,8 +35,11 @@ struct ZoomSourceMarker: UIViewRepresentable {
 
     func updateUIView(_ view: ZoomSourceMarkerView, context: Context) {
         view.layer.cornerRadius = cornerRadius
-        // The id bound to this reused view may have changed across a SwiftUI diff: clear any prior
-        // mapping for this exact view, then re-register under the current id.
+        // Only touch the registry when the mapping actually needs to change: on the common
+        // re-render (same id, same view) this is a no-op, avoiding an O(n) dictionary sweep per
+        // tile. When the id bound to this reused view changed across a SwiftUI diff, clear any
+        // prior mapping for this exact view, then re-register under the current id.
+        guard ZoomSourceRegistry.shared.view(for: id) !== view else { return }
         ZoomSourceRegistry.shared.deregister(view)
         ZoomSourceRegistry.shared.register(view, for: id)
     }
