@@ -50,9 +50,12 @@ struct ZoomCoverAccessor<Item: Identifiable, C: View>: UIViewControllerRepresent
     }
 
     func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
-        // Refresh the closures/binding to the latest, then reconcile against the desired value.
+        // Refresh the closures/binding/configuration to the latest, then reconcile against the
+        // desired value. Refreshing `configuration` matters when it derives from view state
+        // (e.g. a settings-driven spring) — the next present reads the freshest value.
         context.coordinator.content = content
         context.coordinator.item = item
+        context.coordinator.configuration = configuration
         context.coordinator.reconcile(desired: item.wrappedValue)
     }
 
